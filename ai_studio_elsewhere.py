@@ -169,9 +169,10 @@ subscription_manager = SubscriptionManager()
 
 # Initialize user session
 if "user_id" not in st.session_state:
-    st.session_state.user_id = "demo_user"
-    st.session_state.user_email = "director@aistudioelsewhere.com"
-    st.session_state.user_tier = "free"
+    st.session_state.user_id = "admin_lucadisanto"
+    st.session_state.user_email = "ldisanto3@gmail.com"
+    st.session_state.user_tier = "studio"
+    st.session_state.is_admin = True
 
 # OpenAI for translation & text processing
 try:
@@ -180,6 +181,14 @@ try:
 except Exception as e:
     print(f"⚠️ OpenAI client init failed: {e}")
     openai_client = None
+
+# Runway Characters (Latest GWM-1)
+try:
+    from runway_characters_ui import display_character_creation_tab, display_character_management
+    CHARACTERS_AVAILABLE = True
+except ImportError:
+    CHARACTERS_AVAILABLE = False
+    print("⚠️ Runway Characters module not available")
 
 # PDF processing
 try:
@@ -723,13 +732,14 @@ st.sidebar.code(
 # Main Navigation
 # ===========================================
 
-tab_home, tab_new_project, tab_script, tab_scenes, tab_concepts, tab_video, tab_storyboard, tab_exports = st.tabs([
+tab_home, tab_new_project, tab_script, tab_scenes, tab_concepts, tab_video, tab_characters, tab_storyboard, tab_exports = st.tabs([
     "🏠 Home",
     "📝 New Project",
     "📄 Script Upload",
     "🎬 Scene Breakdown",
     "🎨 Concept Images",
     "🎥 Video Generation",
+    "🎭 Characters",
     "📋 Storyboard",
     "📦 Export"
 ])
@@ -956,7 +966,7 @@ with tab_concepts:
     st.subheader("🎨 Generate Concept Images")
     
     # Check subscription
-    if not subscription_manager.has_feature("concept_images"):
+    if not subscription_manager.has_feature("concept_images") and not st.session_state.get("is_admin", False):
         st.error("🔒 Concept Image Generation - Pro Plan Required")
         
         col1, col2, col3 = st.columns(3)
@@ -1032,7 +1042,7 @@ with tab_video:
     st.subheader("🎥 Generate Experimental Videos")
     
     # Check subscription
-    if not subscription_manager.has_feature("video_generation"):
+    if not subscription_manager.has_feature("video_generation") and not st.session_state.get("is_admin", False):
         st.error("🔒 Video Generation - Pro Plan Required")
         
         col1, col2, col3 = st.columns(3)
@@ -1087,6 +1097,23 @@ with tab_video:
                 st.info("Copy runway_video_ui.py and runway_video_agent.py to your project directory.")
 
 # ===========================================
+# Tab: Characters (GWM-1 Avatars)
+# ===========================================
+
+with tab_characters:
+    if not CHARACTERS_AVAILABLE:
+        st.error("❌ Runway Characters module not available")
+        st.info("Copy runway_character_manager.py and runway_characters_ui.py to your project")
+    else:
+        # Character creation and management
+        char_tab1, char_tab2 = st.tabs(["Create Character", "Manage Characters"])
+        
+        with char_tab1:
+            display_character_creation_tab()
+        
+        with char_tab2:
+            display_character_management()
+
 # Tab: Storyboard
 # ===========================================
 
