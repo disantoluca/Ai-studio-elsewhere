@@ -1,0 +1,63 @@
+# Environment & Secrets
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# Data Files (Scripts, Videos, Generated Content)
+data/
+scripts/
+scenes/
+concepts/
+videos/
+storyboards/
+exports/
+
+# User uploads & Generated files
+uploads/
+*.pdf
+*.docx
+*.mp4
+*.mov
+*.png
+*.jpg
+*.jpeg
+
+# Streamlit cache
+.streamlit/cache/
+.streamlit/*.cache
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.Python
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Project specific (Sleepless Blue Nights)
+蓝夜未眠*
+sleepless_blue_nights_*
+*.mov
+*.mp4
+test_videos/
+test_scripts/
+
+# Cache files
+*.cache
+.cache
+cache/
