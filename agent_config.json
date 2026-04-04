@@ -1,0 +1,12 @@
+{
+  "api_key": "",
+  "model": "qwen-vl-max",
+  "region": "intl",
+  "base_url": "https://dashscope-intl.aliyuncs.com/api/v1",
+  "timeout": 30,
+  "max_retries": 3,
+  "language": "zh",
+  "enable_caching": true,
+  "cache_dir": "./cache",
+  "logging_level": "INFO"
+}
