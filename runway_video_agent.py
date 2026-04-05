@@ -115,6 +115,10 @@ class RunwayVideoAgent:
         else:
             logger.info("✅ Runway Video Agent initialized")
             self.available = True
+        
+        def get_generation_history(self):
+        """Return generation history"""
+        return self.generation_history
     
     # ============================================================
     # MOTION CONTROL PRESETS
