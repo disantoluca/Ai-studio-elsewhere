@@ -32,6 +32,13 @@ from typing import Dict, List, Optional, Any, Tuple
 from storyboard_ui import display_storyboard_ui
 from storyboard_pdf_ui import display_pdf_export_ui, create_pdf_export_settings
 
+# Demo project
+try:
+    from demo_project import load_demo_project
+    DEMO_AVAILABLE = True
+except ImportError:
+    DEMO_AVAILABLE = False
+
 # ===========================================
 # Core Dependencies
 # ===========================================
@@ -788,6 +795,47 @@ with tab_home:
                 st.write(f"  Scenes: {len(proj.scenes)}")
     else:
         st.info("No projects yet. Click 'New Project' to get started!")
+    
+    # Demo Project Loader
+    if DEMO_AVAILABLE:
+        st.markdown("---")
+        st.markdown("### 🎬 Try the Demo")
+        st.markdown("Load a pre-built demo film project — *The Last Night Tram* — to explore all features without uploading a script.")
+        if st.button("🚀 Load Demo Project", type="primary", use_container_width=True, key="load_demo"):
+            demo = load_demo_project()
+            project_id = "the_last_night_tram"
+            
+            # Convert demo scenes to SceneBreakdown objects
+            demo_scenes = []
+            for s in demo["scenes"]:
+                demo_scenes.append(SceneBreakdown(
+                    scene_id=f"scene_{s['id']}",
+                    scene_number=s["number"],
+                    heading=s["title"],
+                    location=s["location"],
+                    time_of_day="Night",
+                    characters=[],
+                    action=s["text_en"],
+                    dialogue=[],
+                    mood=", ".join(s["mood"]) if isinstance(s["mood"], list) else s["mood"],
+                    keywords=s["mood"] if isinstance(s["mood"], list) else []
+                ))
+            
+            project = Project(
+                project_id=project_id,
+                title_en=demo["title"],
+                title_zh=demo["title_zh"],
+                director=demo["director"],
+                logline=demo["logline_en"],
+                created_at=datetime.now().isoformat(),
+                last_updated=datetime.now().isoformat(),
+                script_path=None,
+                scenes=demo_scenes
+            )
+            save_project(project)
+            st.balloons()
+            st.success("✅ Demo project loaded: **The Last Night Tram** (夜晚最后一班电车)")
+            st.info("Select it from the sidebar dropdown, then explore all tabs!")
 
 # ===========================================
 # Tab: New Project
