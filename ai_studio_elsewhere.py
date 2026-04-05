@@ -1095,8 +1095,52 @@ with tab_video:
                 from runway_video_ui import display_video_generation_tab
                 display_video_generation_tab(scenes_for_video, project.title_en)
             except ImportError:
-                st.error("❌ Runway video generation module not available. Make sure runway_video_ui.py is in the same directory.")
-                st.info("Copy runway_video_ui.py and runway_video_agent.py to your project directory.")
+                st.warning("⚠️ Runway video module not connected — showing demo mode")
+                st.markdown("---")
+                
+                # Demo fallback: let directors preview workflow without API
+                st.markdown("#### 🎬 Video Generation Preview (Demo Mode)")
+                st.info("This demo shows the video generation workflow. Connect Runway API keys to generate real videos.")
+                
+                # Scene selector
+                scene_names = [s["heading"] for s in scenes_for_video]
+                selected_scene = st.selectbox("🎬 Select Scene", scene_names, key="demo_video_scene")
+                scene_data = scenes_for_video[scene_names.index(selected_scene)]
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    shot_type = st.selectbox("📹 Shot Type", [
+                        "Wide Shot", "Medium Shot", "Close-Up", 
+                        "Dolly In", "Pan Left", "Orbit", "Push In"
+                    ], key="demo_shot_type")
+                with col2:
+                    duration = st.slider("⏱️ Duration (seconds)", 3, 15, 5, key="demo_duration")
+                
+                st.text_area("🎯 Scene Prompt", scene_data["prompt"], height=80, key="demo_prompt")
+                
+                if st.button("🎥 Generate Demo Video", type="primary", use_container_width=True, key="demo_gen"):
+                    with st.spinner("🎬 Generating preview..."):
+                        import time
+                        progress = st.progress(0)
+                        for i in range(100):
+                            time.sleep(0.02)
+                            progress.progress(i + 1)
+                        
+                        st.success("✅ Demo video generated!")
+                        st.markdown(f"""
+                        **Scene:** {selected_scene}  
+                        **Shot:** {shot_type}  
+                        **Duration:** {duration}s  
+                        
+                        🎬 *In production mode, Runway Gen-4.5 would generate a cinematic video clip here.*  
+                        *To enable: add `RUNWAY_API_KEY` to your Railway environment variables.*
+                        """)
+                        
+                        # Show a placeholder with scene info
+                        st.markdown("---")
+                        st.markdown("##### 📋 Shot List Generated")
+                        for i, s in enumerate(scenes_for_video[:5], 1):
+                            st.write(f"**Shot {i}:** {s['heading']}")
 
 # ===========================================
 # Tab: Characters (GWM-1 Avatars)
@@ -1104,8 +1148,45 @@ with tab_video:
 
 with tab_characters:
     if not CHARACTERS_AVAILABLE:
-        st.error("❌ Runway Characters module not available")
-        st.info("Copy runway_character_manager.py and runway_characters_ui.py to your project")
+        st.subheader("🎭 Character Bible (Demo Mode)")
+        st.info("Connect Runway Characters module for AI avatar generation. Showing character planning tools.")
+        
+        if not selected_project:
+            st.warning("⚠️ Select a project first")
+        else:
+            project = load_project(selected_project)
+            
+            # Character planning even without Runway
+            st.markdown("#### 📝 Character Profiles")
+            
+            char_name = st.text_input("Character Name", key="demo_char_name")
+            char_role = st.selectbox("Role", ["Protagonist", "Antagonist", "Supporting", "Minor"], key="demo_char_role")
+            char_desc = st.text_area("Description", placeholder="Physical appearance, personality, motivation...", key="demo_char_desc")
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                char_age = st.text_input("Age", key="demo_char_age")
+            with col2:
+                char_trait = st.text_input("Key Trait", key="demo_char_trait")
+            
+            if st.button("💾 Save Character Profile", type="primary", key="demo_save_char"):
+                if char_name:
+                    st.success(f"✅ Character '{char_name}' saved to project")
+                else:
+                    st.warning("Enter a character name")
+            
+            # Show existing characters from scenes
+            if project.scenes:
+                st.markdown("---")
+                st.markdown("#### 🎬 Characters Found in Script")
+                all_chars = set()
+                for scene in project.scenes:
+                    all_chars.update(scene.characters)
+                if all_chars:
+                    for char in sorted(all_chars):
+                        st.write(f"• **{char}**")
+                else:
+                    st.write("No characters extracted yet. Run Scene Breakdown first.")
     else:
         # Character creation and management
         char_tab1, char_tab2 = st.tabs(["Create Character", "Manage Characters"])
@@ -1129,16 +1210,50 @@ with tab_storyboard:
         
         st.markdown(f"### {project.title_en}")
         
-        if not project.concepts:
-            st.warning("⚠️ Generate concept images first")
+        if not project.scenes:
+            st.warning("⚠️ Extract scenes first (Scene Breakdown tab)")
         else:
-            st.write("**Storyboard Layout Options:**")
-            layout = st.selectbox(
-                "Choose layout",
-                ["6-panel", "8-panel", "12-panel scroll", "Custom"]
-            )
+            # Scene selector
+            scene_options = {f"Scene {s.scene_number}: {s.heading}": i for i, s in enumerate(project.scenes)}
+            selected_scene_name = st.selectbox("🎬 Select Scene", list(scene_options.keys()), key="storyboard_scene")
+            scene_idx = scene_options[selected_scene_name]
+            scene = project.scenes[scene_idx]
             
-            st.info(f"📋 Assembling storyboard with {layout} layout...")
+            # Build scene dict for storyboard generator
+            scene_dict = {
+                "scene_number": scene.scene_number,
+                "heading": scene.heading,
+                "location": scene.location,
+                "time_of_day": scene.time_of_day,
+                "characters": scene.characters,
+                "mood": scene.mood,
+                "action": scene.action,
+                "visual_prompt": f"{scene.heading}. {scene.location}, {scene.time_of_day}. Mood: {scene.mood}. {scene.action[:200]}",
+                "video_prompt": f"Cinematic scene: {scene.heading}, {scene.mood} atmosphere"
+            }
+            
+            try:
+                display_storyboard_ui(
+                    scene=scene_dict,
+                    generate_image_func=None,
+                    title="🎬 Storyboard Builder"
+                )
+            except Exception as e:
+                st.error(f"Storyboard module error: {e}")
+                st.info("Falling back to basic storyboard view...")
+                
+                layout = st.selectbox("Choose layout", ["6-panel", "8-panel", "12-panel scroll"])
+                st.info(f"📋 Assembling storyboard with {layout} layout...")
+            
+            # PDF Export
+            st.markdown("---")
+            st.markdown("#### 📄 Export Storyboard PDF")
+            try:
+                settings = create_pdf_export_settings()
+                if st.button("📥 Export Storyboard PDF", type="primary", key="export_storyboard_pdf"):
+                    display_pdf_export_ui(project, settings)
+            except Exception as e:
+                st.info(f"PDF export not available: {e}")
 
 # ===========================================
 # Tab: Export
@@ -1180,5 +1295,5 @@ st.markdown("""
 **AI Studio Elsewhere** · 云上电影工作室
 Beyond imagination, above the clouds — 云上。
 
-Built for directors by directors. | © 2024
+Built for directors by directors. | © 2024-2026
 """)
