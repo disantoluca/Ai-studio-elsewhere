@@ -960,33 +960,36 @@ with tab_scenes:
     else:
         project = load_project(selected_project)
         
-        if not project.script_path:
+        if not project.script_path and not project.scenes:
             st.warning("⚠️ Upload a script first in the 'Script Upload' tab")
         else:
             st.markdown(f"### {project.title_en}")
             
-            if st.button("🔍 Analyze Script → Extract Scenes", type="primary", use_container_width=True):
-                with st.spinner("Parsing script..."):
-                    # Read script
-                    script_text = ""
-                    script_path = Path(project.script_path)
-                    
-                    if script_path.suffix == ".pdf":
-                        images, page_paths = extract_pages_from_pdf(str(script_path))
-                        for page_path in page_paths:
-                            script_text += extract_text_from_image(page_path) + "\n"
-                    elif script_path.suffix == ".txt":
-                        script_text = script_path.read_text(encoding="utf-8")
-                    
-                    # Parse to scenes
-                    if script_text:
-                        scenes = parse_script_to_scenes(script_text)
-                        project.scenes = scenes
-                        save_project(project)
-                        st.success(f"✅ Extracted and translated {len(scenes)} scenes")
-                        st.rerun()  # Refresh to show scenes immediately
-                    else:
-                        st.error("❌ Could not extract text from script")
+            if project.script_path:
+                if st.button("🔍 Analyze Script → Extract Scenes", type="primary", use_container_width=True):
+                    with st.spinner("Parsing script..."):
+                        # Read script
+                        script_text = ""
+                        script_path = Path(project.script_path)
+                        
+                        if script_path.suffix == ".pdf":
+                            images, page_paths = extract_pages_from_pdf(str(script_path))
+                            for page_path in page_paths:
+                                script_text += extract_text_from_image(page_path) + "\n"
+                        elif script_path.suffix == ".txt":
+                            script_text = script_path.read_text(encoding="utf-8")
+                        
+                        # Parse to scenes
+                        if script_text:
+                            scenes = parse_script_to_scenes(script_text)
+                            project.scenes = scenes
+                            save_project(project)
+                            st.success(f"✅ Extracted and translated {len(scenes)} scenes")
+                            st.rerun()  # Refresh to show scenes immediately
+                        else:
+                            st.error("❌ Could not extract text from script")
+            elif project.scenes:
+                st.success(f"✅ {len(project.scenes)} scenes pre-loaded (demo project)")
             
             # Display scenes
             if project.scenes:
