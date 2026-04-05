@@ -33,7 +33,7 @@ class TongyiWanxClient:
                 negative_prompt=negative_prompt if negative_prompt else None,
                 n=n,
                 size=size,
-                seed=seed
+                seed=seed if seed is not None else 12345
             )
             
             if rsp.status_code != 200:
