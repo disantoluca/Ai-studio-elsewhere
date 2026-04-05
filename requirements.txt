@@ -7,3 +7,4 @@ setuptools>=65.0.0
 Pillow>=9.0.0
 googlemaps
 reportlab>=4.0.0
+dashscope>=1.14.0
