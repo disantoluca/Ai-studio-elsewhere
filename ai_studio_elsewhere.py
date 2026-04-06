@@ -807,49 +807,114 @@ tab_home, tab_new_project, tab_script, tab_scenes, tab_concepts, tab_video, tab_
 # ===========================================
 
 with tab_home:
-    st.subheader("🎬 Welcome to AI Studio Elsewhere")
     
+    # Hero Section
     st.markdown("""
-    ### Cloud-based Film Production Suite
+    <div style="text-align: center; padding: 1rem 0;">
+        <h1 style="font-size: 2.2rem; margin-bottom: 0.3rem;">AI Studio Elsewhere</h1>
+        <h3 style="font-weight: 400; opacity: 0.8;">云上电影工作室</h3>
+        <p style="font-size: 1.15rem; opacity: 0.7; max-width: 600px; margin: 0.8rem auto;">
+            From script to screen — before you spend a single dollar on production.
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
     
-    A fully integrated AI cinematic laboratory designed for film directors.
+    st.markdown("---")
     
-    **Workflow:**
-    1. **📝 New Project** → Create a film project
-    2. **📄 Script Upload** → Upload your script (PDF, Word, TXT)
-    3. **🎬 Scene Breakdown** → OCR extraction, translation, scene analysis
-    4. **🎨 Concept Images** → Generate visual concepts per scene
-    5. **🎥 Video Generation** → Create experimental video scenes
-    6. **📋 Storyboard** → Assemble sequences
-    7. **📦 Export** → Download complete director's packages
+    # What You Can Do — director-focused
+    st.markdown("### What can you do here?")
+    st.markdown("")
     
-    **Features:**
-    - 🌐 Bilingual support (Chinese ↔ English + Pinyin)
-    - 🎨 AI concept art generation
-    - 🎬 Experimental video synthesis
-    - 📍 Real-location research
-    - 📊 Comprehensive exports
+    col1, col2 = st.columns(2)
     
-    ---
+    with col1:
+        st.markdown("##### 🌐 Translate Everything — Chinese ↔ English")
+        st.markdown("Upload a script in Chinese and get a full English translation — scenes, dialogue, loglines, story notes. Or go the other way. Pinyin included. Your film crosses borders before it even wraps.")
+        st.markdown("")
+        
+        st.markdown("##### 🎨 See Your Film Before You Shoot It")
+        st.markdown("Generate concept art for every scene. Choose cinematic, surreal, noir, or documentary styles. Each image is crafted from your script's mood, location, and action.")
+        st.markdown("")
+        
+        st.markdown("##### 🎥 Generate Experimental Video")
+        st.markdown("Turn your concept art into short video clips with camera motion — dolly, pan, orbit, tilt. Preview how scenes feel in motion before you commit to a shoot.")
     
-    **Current Projects:**
+    with col2:
+        st.markdown("##### 📄 Upload Any Script, Any Language")
+        st.markdown("Drop in a PDF, Word doc, or plain text — in Chinese or English. The system extracts every scene, translates, and organizes your story automatically.")
+        st.markdown("")
+        
+        st.markdown("##### 🎬 Break Down Every Scene")
+        st.markdown("AI reads your script and identifies locations, characters, time of day, mood, and key actions. No manual work — just upload and go.")
+        st.markdown("")
+        
+        st.markdown("##### 📍 Scout Real Locations")
+        st.markdown("Search Google Places for real-world filming locations that match your scenes. See photos, ratings, and addresses — all from inside the studio.")
+        st.markdown("")
+        
+        st.markdown("##### 📋 Build Your Storyboard")
+        st.markdown("Assemble 6, 8, or 12-panel storyboards from your scenes. Export as PDF — ready for your crew, your investors, or your own creative process.")
+    
+    st.markdown("---")
+    
+    # The Workflow
+    st.markdown("### Your workflow")
+    
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.markdown("**Step 1**")
+        st.markdown("📝 Create a project and upload your script")
+    with col2:
+        st.markdown("**Step 2**")
+        st.markdown("🎬 Review your scene breakdown — edit, refine")
+    with col3:
+        st.markdown("**Step 3**")
+        st.markdown("🎨 Generate concept art and video experiments")
+    with col4:
+        st.markdown("**Step 4**")
+        st.markdown("📦 Export your director's package — PDF, images, storyboard")
+    
+    st.markdown("---")
+    
+    # Built For
+    st.markdown("### Built for directors who think visually — and work across languages")
+    st.markdown("""
+    This is not post-production software. This is a **pre-production imagination engine**.
+    
+    Use it to explore your film before cameras roll. Test moods. Try locations. 
+    See what your story looks like — then decide what to shoot.
+    
+    **Translation is at the core.** Upload a script in Mandarin, get a complete English 
+    translation — every scene, every line of dialogue, every logline. Or start in English 
+    and translate to Chinese. The system handles OCR, segmentation, and Pinyin automatically.
+    
+    Built for international co-productions, festival submissions, and cross-cultural storytelling.
     """)
     
+    st.markdown("---")
+    
+    # Current Projects
+    st.markdown("### Your Projects")
+    
     if projects:
-        for proj_id in projects[:3]:  # Show first 3
+        for proj_id in projects[:5]:
             proj = load_project(proj_id)
             if proj:
-                st.write(f"• **{proj.title_en}** ({proj.title_zh})")
-                st.write(f"  Director: {proj.director}")
-                st.write(f"  Scenes: {len(proj.scenes)}")
+                col1, col2, col3 = st.columns([3, 1, 1])
+                with col1:
+                    st.markdown(f"**{proj.title_en}** {f'({proj.title_zh})' if proj.title_zh else ''}")
+                with col2:
+                    st.markdown(f"🎬 {len(proj.scenes)} scenes")
+                with col3:
+                    st.markdown(f"👤 {proj.director}")
     else:
-        st.info("No projects yet. Click 'New Project' to get started!")
+        st.info("No projects yet. Create one in the **New Project** tab, or try the demo below.")
     
     # Demo Project Loader
     if DEMO_AVAILABLE:
         st.markdown("---")
-        st.markdown("### 🎬 Try the Demo")
-        st.markdown("Load a pre-built demo film project — *The Last Night Tram* — to explore all features without uploading a script.")
+        st.markdown("### 🎬 Try it now")
+        st.markdown("Load **The Last Night Tram** (夜晚最后一班电车) — a complete demo film project with 3 scenes, moods, and visual prompts. No script upload needed.")
         if st.button("🚀 Load Demo Project", type="primary", use_container_width=True, key="load_demo"):
             demo = load_demo_project()
             project_id = "the_last_night_tram"
