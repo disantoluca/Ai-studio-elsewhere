@@ -39,6 +39,13 @@ try:
 except ImportError:
     DEMO_AVAILABLE = False
 
+# Google Places for location scouting
+try:
+    from google_places_agent import GooglePlacesAgent
+    PLACES_AVAILABLE = True
+except ImportError:
+    PLACES_AVAILABLE = False
+
 # ===========================================
 # Core Dependencies
 # ===========================================
@@ -625,6 +632,11 @@ def load_project(project_id: str) -> Optional[Project]:
                         mood=s.get("mood", ""),
                     ))
         
+        # Restore concepts
+        concepts = data.get("concepts", {})
+        if not isinstance(concepts, dict):
+            concepts = {}
+        
         project = Project(
             project_id=data.get("project_id"),
             title_en=data.get("title_en"),
@@ -635,6 +647,7 @@ def load_project(project_id: str) -> Optional[Project]:
             last_updated=data.get("last_updated"),
             script_path=data.get("script_path"),
             scenes=scenes,
+            concepts=concepts,
         )
         return project
     except Exception as e:
@@ -670,7 +683,7 @@ def save_project(project: Project):
             }
             for s in project.scenes
         ],
-        "concepts": {k: len(v) for k, v in project.concepts.items()},
+        "concepts": project.concepts,
         "videos": list(project.videos.keys()),
     }
     
@@ -776,7 +789,7 @@ st.sidebar.code(
 # Main Navigation
 # ===========================================
 
-tab_home, tab_new_project, tab_script, tab_scenes, tab_concepts, tab_video, tab_characters, tab_storyboard, tab_exports = st.tabs([
+tab_home, tab_new_project, tab_script, tab_scenes, tab_concepts, tab_video, tab_characters, tab_storyboard, tab_locations, tab_exports = st.tabs([
     "🏠 Home",
     "📝 New Project",
     "📄 Script Upload",
@@ -785,6 +798,7 @@ tab_home, tab_new_project, tab_script, tab_scenes, tab_concepts, tab_video, tab_
     "🎥 Video Generation",
     "🎭 Characters",
     "📋 Storyboard",
+    "📍 Locations",
     "📦 Export"
 ])
 
@@ -1172,7 +1186,8 @@ with tab_video:
                 {
                     "id": scene.scene_id,
                     "heading": scene.heading,
-                    "prompt": f"{scene.heading}. Location: {scene.location}. Time: {scene.time_of_day}. Mood: {scene.mood}. Action: {scene.action[:100]}"
+                    "prompt": f"{scene.heading}. Location: {scene.location}. Time: {scene.time_of_day}. Mood: {scene.mood}. Action: {scene.action[:100]}",
+                    "concept_image": project.concepts.get(scene.scene_id, [None])[0]
                 }
                 for scene in project.scenes
             ]
@@ -1340,6 +1355,148 @@ with tab_storyboard:
                     display_pdf_export_ui(project, settings)
             except Exception as e:
                 st.info(f"PDF export not available: {e}")
+
+# ===========================================
+# Tab: Locations
+# ===========================================
+
+with tab_locations:
+    st.subheader("📍 Location Scouting")
+    
+    if not selected_project:
+        st.warning("⚠️ Select a project first")
+    else:
+        project = load_project(selected_project)
+        
+        if not PLACES_AVAILABLE:
+            st.error("❌ Google Places module not available")
+        else:
+            google_api_key = os.getenv("GOOGLE_PLACES_API_KEY")
+            
+            if not google_api_key:
+                st.warning("⚠️ Google Places API key not configured")
+                google_api_key = st.text_input("Enter Google Places API Key", type="password", key="gplaces_key")
+                if google_api_key:
+                    os.environ["GOOGLE_PLACES_API_KEY"] = google_api_key
+            
+            if google_api_key:
+                agent = GooglePlacesAgent(google_api_key)
+                
+                st.markdown(f"### {project.title_en}")
+                
+                # Two modes: search from scenes or free search
+                location_mode = st.radio(
+                    "Search mode",
+                    ["🎬 From Scene Locations", "🔍 Free Search"],
+                    horizontal=True,
+                    key="loc_mode"
+                )
+                
+                if location_mode == "🎬 From Scene Locations" and project.scenes:
+                    st.markdown("---")
+                    st.markdown("Select a scene to find real-world filming locations that match:")
+                    
+                    scene_options = {
+                        f"Scene {s.scene_number}: {s.heading} — 📍 {s.location}": i 
+                        for i, s in enumerate(project.scenes)
+                    }
+                    selected_scene_name = st.selectbox(
+                        "🎬 Select Scene", 
+                        list(scene_options.keys()), 
+                        key="loc_scene_select"
+                    )
+                    scene_idx = scene_options[selected_scene_name]
+                    scene = project.scenes[scene_idx]
+                    
+                    # Show scene info
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.markdown(f"**Location:** {scene.location}")
+                    with col2:
+                        st.markdown(f"**Time:** {scene.time_of_day}")
+                    with col3:
+                        st.markdown(f"**Mood:** {scene.mood}")
+                    
+                    # Allow editing the search query
+                    search_query = st.text_input(
+                        "🔍 Search query (edit to refine)",
+                        value=f"{scene.location} filming location",
+                        key="loc_scene_query"
+                    )
+                    
+                    if st.button("🌍 Scout Locations", type="primary", use_container_width=True, key="loc_scout_btn"):
+                        with st.spinner("🔍 Searching for locations..."):
+                            results = agent.search_locations(search_query, max_results=6)
+                            
+                            if results:
+                                st.success(f"✅ Found {len(results)} locations")
+                                
+                                for i, loc in enumerate(results):
+                                    with st.expander(f"📍 {loc['name']} — ⭐ {loc.get('rating', 'N/A')}"):
+                                        st.markdown(f"**Address:** {loc['address']}")
+                                        
+                                        if loc.get('rating'):
+                                            st.markdown(f"**Rating:** ⭐ {loc['rating']} ({loc.get('user_ratings_total', 0)} reviews)")
+                                        
+                                        st.markdown(f"**Coordinates:** {loc['lat']:.4f}, {loc['lng']:.4f}")
+                                        
+                                        # Show photos
+                                        if loc.get("photo_refs"):
+                                            photo_cols = st.columns(min(len(loc["photo_refs"]), 3))
+                                            for j, ref in enumerate(loc["photo_refs"][:3]):
+                                                photo_url = agent.get_photo_url(ref)
+                                                if photo_url:
+                                                    with photo_cols[j]:
+                                                        st.image(photo_url, use_container_width=True)
+                                        
+                                        # Google Maps link
+                                        maps_url = f"https://www.google.com/maps/place/?q=place_id:{loc['place_id']}"
+                                        st.markdown(f"[🗺️ Open in Google Maps]({maps_url})")
+                            else:
+                                st.warning("No locations found. Try a different search query.")
+                
+                elif location_mode == "🎬 From Scene Locations" and not project.scenes:
+                    st.info("Load scenes first (Scene Breakdown tab) to search by scene location.")
+                
+                else:
+                    # Free search mode
+                    st.markdown("---")
+                    st.markdown("Search for any filming location worldwide:")
+                    
+                    search_query = st.text_input(
+                        "🔍 Search",
+                        placeholder="e.g., abandoned tram station Europe, neon alley Tokyo, misty mountain village",
+                        key="loc_free_query"
+                    )
+                    
+                    if search_query and st.button("🌍 Search", type="primary", use_container_width=True, key="loc_free_btn"):
+                        with st.spinner("🔍 Searching..."):
+                            results = agent.search_locations(search_query, max_results=6)
+                            
+                            if results:
+                                st.success(f"✅ Found {len(results)} locations")
+                                
+                                for i, loc in enumerate(results):
+                                    with st.expander(f"📍 {loc['name']} — ⭐ {loc.get('rating', 'N/A')}"):
+                                        st.markdown(f"**Address:** {loc['address']}")
+                                        
+                                        if loc.get('rating'):
+                                            st.markdown(f"**Rating:** ⭐ {loc['rating']} ({loc.get('user_ratings_total', 0)} reviews)")
+                                        
+                                        st.markdown(f"**Coordinates:** {loc['lat']:.4f}, {loc['lng']:.4f}")
+                                        
+                                        if loc.get("photo_refs"):
+                                            photo_cols = st.columns(min(len(loc["photo_refs"]), 3))
+                                            for j, ref in enumerate(loc["photo_refs"][:3]):
+                                                photo_url = agent.get_photo_url(ref)
+                                                if photo_url:
+                                                    with photo_cols[j]:
+                                                        st.image(photo_url, use_container_width=True)
+                                        
+                                        maps_url = f"https://www.google.com/maps/place/?q=place_id:{loc['place_id']}"
+                                        st.markdown(f"[🗺️ Open in Google Maps]({maps_url})")
+                            else:
+                                st.warning("No locations found. Try a different search.")
 
 # ===========================================
 # Tab: Export

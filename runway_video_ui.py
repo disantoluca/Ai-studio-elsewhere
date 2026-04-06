@@ -102,25 +102,42 @@ def display_video_generation_tab(scenes: List[Dict], project_title: str):
             )
         
         with col2:
-            duration = st.slider("Duration (seconds)", 5, 30, 8, step=1)
+            duration = st.slider("Duration (seconds)", 2, 10, 5, step=1)
         
         # Display selected prompt
         st.write("**Scene Prompt:**")
         prompt = scene.get("prompt", "")
         st.text_area("Prompt (read-only)", prompt, height=150, disabled=True)
         
+        # Show concept image if available
+        concept_image = scene.get("concept_image")
+        if concept_image:
+            st.write("**Reference Image (from Concept Art):**")
+            try:
+                import requests as req
+                img_response = req.get(concept_image, timeout=10)
+                st.image(img_response.content, width=400, caption="This concept image will be used as input for video generation")
+            except:
+                st.info(f"Concept image available: {concept_image[:60]}...")
+        else:
+            st.warning("⚠️ No concept image found for this scene. Generate concept art first (Concept Images tab) for best video results.")
+        
         # Generation button
         if st.button("🎥 Generate Video", type="primary", use_container_width=True):
-            with st.spinner("⏳ Generating video (this may take a minute)..."):
-                request = VideoGenRequest(
-                    scene_id=scene.get("id", f"scene_{selected_scene_idx}"),
-                    scene_heading=scene.get("heading", "Scene"),
-                    prompt_en=prompt,
-                    motion_type=selected_motion,
-                    style=selected_style,
-                    duration=duration,
-                    notes=f"Generated for {project_title}"
-                )
+            if not concept_image:
+                st.error("❌ Runway requires a reference image. Please generate concept art for this scene first.")
+            else:
+                with st.spinner("⏳ Generating video (this may take 1-2 minutes)..."):
+                    request = VideoGenRequest(
+                        scene_id=scene.get("id", f"scene_{selected_scene_idx}"),
+                        scene_heading=scene.get("heading", "Scene"),
+                        prompt_en=prompt,
+                        motion_type=selected_motion,
+                        style=selected_style,
+                        duration=duration,
+                        prompt_image=concept_image,
+                        notes=f"Generated for {project_title}"
+                    )
                 
                 result = agent.generate_video(request)
                 
