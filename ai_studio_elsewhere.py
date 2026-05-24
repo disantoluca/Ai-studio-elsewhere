@@ -294,6 +294,7 @@ class SceneBreakdown:
     image_paths: List[str] = None
     keywords: List[str] = None
     mood: str = ""
+    scene_type: str = "STANDARD"  # STANDARD | INTERCUT | FLASHBACK | MONTAGE
     
     def __post_init__(self):
         if self.image_paths is None:
@@ -393,23 +394,49 @@ def extract_text_fast(file_bytes: bytes) -> str:
         print(f"❌ PyMuPDF error: {e}")
         return ""
 
-def stream_scenes_from_text(text: str, max_pages: int = MAX_PAGES):
+def _normalize_script_text(text: str) -> str:
+    """Normalize dashes and whitespace so regex is reliable."""
+    import re
+    text = text.replace('\u2013', '-').replace('\u2014', '-')  # en/em dash → hyphen
+    text = re.sub(r'[ \t]+', ' ', text)                        # collapse multiple spaces
+    return text
+
+
+def extract_scene_blocks(text: str) -> list:
     """
-    Generator: yields raw scene dicts as regex finds INT./EXT. headers.
-    Instant — no API. Used to show structure before GPT enrichment.
+    Robust scene extractor. Captures full INT./EXT. scene blocks.
+    Tolerates em-dashes, irregular spacing, and non-standard formatting.
+    Returns list of dicts: id, heading, body, type.
     """
     import re
-    chunks = re.split(r'(?=\n(?:INT\.|EXT\.))', text)
-    for i, chunk in enumerate(chunks):
-        chunk = chunk.strip()
-        if not chunk:
-            continue
-        lines = chunk.split('\n')
-        heading = lines[0].strip()
-        if not (heading.startswith('INT.') or heading.startswith('EXT.')):
-            continue
-        action = ' '.join(l.strip() for l in lines[1:6] if l.strip())
-        yield {"id": i, "heading": heading, "action": action[:200]}
+    text = _normalize_script_text(text)
+    header_re = re.compile(r'(?:^|\n)((?:INT\.|EXT\.)[^\n]+)', re.IGNORECASE | re.MULTILINE)
+    matches = list(header_re.finditer(text))
+    if not matches:
+        return []
+    scenes = []
+    for i, m in enumerate(matches):
+        heading = m.group(1).strip()
+        start = m.end()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+        body = text[start:end].strip()
+        upper = (heading + ' ' + body).upper()
+        if 'INTERCUT' in upper:
+            scene_type = 'INTERCUT'
+        elif 'FLASHBACK' in upper or 'FLASH BACK' in upper:
+            scene_type = 'FLASHBACK'
+        elif 'MONTAGE' in upper:
+            scene_type = 'MONTAGE'
+        else:
+            scene_type = 'STANDARD'
+        scenes.append({'id': i + 1, 'heading': heading, 'body': body[:400], 'type': scene_type})
+    return scenes
+
+
+def stream_scenes_from_text(text: str, max_pages: int = MAX_PAGES):
+    """Thin wrapper — existing callers unchanged."""
+    for s in extract_scene_blocks(text):
+        yield {"id": s["id"], "heading": s["heading"], "action": s["body"][:200]}
 
 # ===========================================
 # Translation & Text Processing
@@ -483,46 +510,59 @@ def translate_scene_elements_to_english(heading: str, location: str, action: str
 def parse_script_to_scenes(text: str, translate: bool = False) -> List[SceneBreakdown]:
     """
     Parse script text to individual scenes with optional translation.
-    Uses GPT-4o for extraction, optionally translates to English.
+    Uses regex for structure, GPT-4o-mini for enrichment.
     """
     if not openai_client:
         return []
-    
+
     try:
-        # Use GPT to structure the script
+        # Pre-extract scene blocks via regex — gives GPT clean structured input
+        # and avoids the [:2000] truncation bug
+        blocks = extract_scene_blocks(text)
+        if blocks:
+            # Build a condensed scene summary for GPT (much richer than raw [:2000])
+            condensed = "\n\n".join(
+                f"SCENE {b['id']}: {b['heading']}\n{b['body'][:300]}"
+                for b in blocks[:20]  # cap at 20 scenes to stay within token budget
+            )
+            gpt_input = condensed
+        else:
+            # No INT./EXT. found — send raw text (covers prose scripts, treatments)
+            gpt_input = text[:8000]
+
         response = openai_client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
                 {
                     "role": "system",
-                    "content": """You are a film script analyst. 
-                    Extract scenes from this script and return JSON array:
-                    [
-                      {
-                        "scene_number": 1,
-                        "heading": "INT. APARTMENT - NIGHT",
-                        "location": "Apartment",
-                        "time_of_day": "Night",
-                        "characters": ["ALICE", "BOB"],
-                        "action": "Alice enters the dark apartment...",
-                        "keywords": ["dark", "mysterious", "tension"],
-                        "mood": "tense"
-                      }
-                    ]
-                    Return ONLY valid JSON."""
+                    "content": (
+                        "You are a film script analyst. "
+                        "Extract scenes from this script and return a JSON array. "
+                        "Each element must have: scene_number, heading, location, "
+                        "time_of_day, characters (array), action, keywords (array), mood. "
+                        "Return ONLY valid JSON — no markdown fences, no commentary."
+                    )
                 },
                 {
                     "role": "user",
-                    "content": f"Parse this script:\n\n{text[:2000]}"  # First 2000 chars
+                    "content": f"Parse this script:\n\n{gpt_input}"
                 }
             ],
-            max_tokens=2000,
+            max_tokens=3000,
             temperature=0.5
         )
         
         json_str = response.choices[0].message.content
-        
-        # Try to extract JSON from response
+
+        # Strip markdown fences GPT sometimes adds despite instructions
+        import re as _re
+        json_str = _re.sub(r'^```(?:json)?\s*', '', json_str.strip(), flags=_re.IGNORECASE)
+        json_str = _re.sub(r'\s*```$', '', json_str.strip())
+        # Extract first JSON array if there is surrounding commentary
+        arr_match = _re.search(r'\[[\s\S]*\]', json_str)
+        if arr_match:
+            json_str = arr_match.group()
+
         try:
             scenes_data = json.loads(json_str)
         except:
@@ -539,6 +579,21 @@ def parse_script_to_scenes(text: str, translate: bool = False) -> List[SceneBrea
                     "mood": "neutral"
                 }
             ]
+            # Better fallback: if we have regex blocks, convert them directly
+            if blocks:
+                scenes_data = [
+                    {
+                        "scene_number": b["id"],
+                        "heading": b["heading"],
+                        "location": "",
+                        "time_of_day": "",
+                        "characters": [],
+                        "action": b["body"],
+                        "keywords": [],
+                        "mood": ""
+                    }
+                    for b in blocks
+                ]
         
         scenes = []
         
@@ -554,6 +609,20 @@ def parse_script_to_scenes(text: str, translate: bool = False) -> List[SceneBrea
                     heading, location, action, mood
                 )
             
+            # Derive scene_type from regex blocks if available
+            block_type = "STANDARD"
+            if blocks and i < len(blocks):
+                block_type = blocks[i].get("type", "STANDARD")
+            else:
+                # Infer from action text
+                action_upper = action.upper()
+                if "INTERCUT" in action_upper:
+                    block_type = "INTERCUT"
+                elif "FLASHBACK" in action_upper or "FLASH BACK" in action_upper:
+                    block_type = "FLASHBACK"
+                elif "MONTAGE" in action_upper:
+                    block_type = "MONTAGE"
+
             scene = SceneBreakdown(
                 scene_id=f"scene_{i+1:03d}",
                 scene_number=scene_data.get("scene_number", i+1),
@@ -564,7 +633,8 @@ def parse_script_to_scenes(text: str, translate: bool = False) -> List[SceneBrea
                 action=action,
                 dialogue=[],
                 keywords=scene_data.get("keywords", []),
-                mood=mood
+                mood=mood,
+                scene_type=block_type,
             )
             scenes.append(scene)
         
@@ -644,12 +714,25 @@ def build_scene_prompts(scene) -> dict:
 
     video_prompt += f', {camera}'
 
+    # Scene-type enhancement — film grammar shapes the prompt
+    scene_type = getattr(scene, 'scene_type', 'STANDARD') if not isinstance(scene, dict) else scene.get('type', 'STANDARD')
+    if scene_type == 'INTERCUT':
+        visual_prompt += ', parallel action, cross-cutting composition'
+        video_prompt += ', dynamic cross-cutting, parallel timelines'
+    elif scene_type == 'FLASHBACK':
+        visual_prompt += ', soft nostalgic lighting, memory haze, desaturated'
+        video_prompt += ', nostalgic tone, soft diffusion, memory atmosphere'
+    elif scene_type == 'MONTAGE':
+        visual_prompt += ', sequence composition, rhythmic visual structure'
+        video_prompt += ', fast cuts, compressed time, rhythmic editing'
+
     return {
         'location': location,
         'mood': mood,
         'visual_prompt': visual_prompt,
         'video_prompt': video_prompt,
         'camera': camera,
+        'scene_type': scene_type,
     }
 
 # ===========================================
@@ -1262,8 +1345,24 @@ with tab_scenes:
                 st.write(f"**{len(project.scenes)} scenes**")
 
                 for i, scene in enumerate(project.scenes):
-                    prompts = build_scene_prompts(scene)
                     with st.expander(f"Scene {scene.scene_number}: {scene.heading}"):
+                        prompts = build_scene_prompts(scene)
+                        stype = prompts.get('scene_type', 'STANDARD')
+                        type_colors = {
+                            'INTERCUT': '#ffcc00',
+                            'FLASHBACK': '#66ccff',
+                            'MONTAGE': '#ff6699',
+                            'STANDARD': '#666666',
+                        }
+                        type_color = type_colors.get(stype, '#666666')
+                        if stype != 'STANDARD':
+                            st.markdown(
+                                f'<span style="background:{type_color};color:#000;'
+                                f'padding:2px 10px;border-radius:4px;font-size:0.75rem;'
+                                f'font-weight:600;letter-spacing:0.08em">{stype}</span>',
+                                unsafe_allow_html=True
+                            )
+
                         col1, col2 = st.columns(2)
 
                         with col1:
