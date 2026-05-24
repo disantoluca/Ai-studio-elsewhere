@@ -294,7 +294,8 @@ class SceneBreakdown:
     image_paths: List[str] = None
     keywords: List[str] = None
     mood: str = ""
-    scene_type: str = "STANDARD"  # STANDARD | INTERCUT | FLASHBACK | MONTAGE
+    scene_type: str = "STANDARD"    # STANDARD | INTERCUT | FLASHBACK | MONTAGE
+    classification: str = "ATMOSPHERIC"  # ACTION | DIALOGUE | ATMOSPHERIC | EMOTIONAL | EXPOSITION | TRANSITION
     
     def __post_init__(self):
         if self.image_paths is None:
@@ -394,9 +395,41 @@ def extract_text_fast(file_bytes: bytes) -> str:
         print(f"❌ PyMuPDF error: {e}")
         return ""
 
+def extract_text_pages(file_bytes: bytes, max_pages: int) -> tuple:
+    """Extract text from PDF, up to max_pages. Returns (text, page_count)."""
+    if not PYMUPDF_AVAILABLE:
+        return "", 0
+    try:
+        doc = fitz.open(stream=file_bytes, filetype="pdf")
+        total_pages = len(doc)
+        pages_text, pages_read = [], 0
+        for i, page in enumerate(doc):
+            if i >= max_pages:
+                break
+            t = page.get_text()
+            if t.strip():
+                pages_text.append(t)
+            pages_read = i + 1
+        return "\n".join(pages_text), pages_read
+    except Exception as e:
+        print(f"❌ PyMuPDF error: {e}")
+        return "", 0
+
 def _normalize_script_text(text: str) -> str:
-    """Normalize dashes and whitespace so regex is reliable."""
+    """Normalize dashes, whitespace, and Chinese scene markers for reliable parsing."""
     import re
+    # Chinese scene markers → standard screenplay format
+    chinese_map = {
+        '内景': 'INT.',
+        '外景': 'EXT.',
+        '内/外景': 'INT./EXT.',
+        '（': '(',
+        '）': ')',
+        '：': ':',
+        '\u3000': ' ',  # ideographic space
+    }
+    for k, v in chinese_map.items():
+        text = text.replace(k, v)
     text = text.replace('\u2013', '-').replace('\u2014', '-')  # en/em dash → hyphen
     text = re.sub(r'[ \t]+', ' ', text)                        # collapse multiple spaces
     return text
@@ -636,6 +669,7 @@ def parse_script_to_scenes(text: str, translate: bool = False) -> List[SceneBrea
                 mood=mood,
                 scene_type=block_type,
             )
+            scene.classification = classify_scene(scene)
             scenes.append(scene)
         
         st.success(f"✅ Extracted {len(scenes)} scenes")
@@ -734,6 +768,141 @@ def build_scene_prompts(scene) -> dict:
         'camera': camera,
         'scene_type': scene_type,
     }
+
+# ===========================================
+# Director Intelligence Engine
+# ===========================================
+
+def classify_scene(scene) -> str:
+    """Rule-based scene classification. Instant — no API."""
+    text = (
+        (getattr(scene, 'action', '') or '') + ' ' +
+        (getattr(scene, 'mood', '') or '') + ' ' +
+        (getattr(scene, 'heading', '') or '')
+    ).lower() if not isinstance(scene, dict) else (
+        scene.get('action', '') + ' ' + scene.get('mood', '') + ' ' + scene.get('heading', '')
+    ).lower()
+
+    scores = {
+        'ACTION': 0, 'DIALOGUE': 0, 'ATMOSPHERIC': 0,
+        'TRANSITION': 0, 'EMOTIONAL': 0, 'EXPOSITION': 0,
+    }
+    action_words = ['runs', 'crashes', 'tears', 'explodes', 'storm', 'fight', 'chase', 'breaks']
+    dialogue_words = ['says', 'asks', 'replies', 'whispers', 'shouts', 'tells', 'conversation']
+    atm_words = ['wind', 'rain', 'dark', 'light', 'sea', 'silence', 'fog', 'mist', 'sky', 'empty']
+    trans_words = ['intercut', 'cut to', 'montage', 'fade', 'dissolve', 'smash cut']
+    emo_words = ['alone', 'memory', 'fear', 'love', 'cry', 'grief', 'longing', 'tenderness']
+    expo_words = ['explains', 'history', 'background', 'tells us', 'years ago', 'long before']
+    for w in action_words:
+        if w in text: scores['ACTION'] += 2
+    for w in dialogue_words:
+        if w in text: scores['DIALOGUE'] += 2
+    for w in atm_words:
+        if w in text: scores['ATMOSPHERIC'] += 2
+    for w in trans_words:
+        if w in text: scores['TRANSITION'] += 3
+    for w in emo_words:
+        if w in text: scores['EMOTIONAL'] += 2
+    for w in expo_words:
+        if w in text: scores['EXPOSITION'] += 2
+    best = max(scores, key=scores.get)
+    return best if scores[best] > 0 else 'ATMOSPHERIC'
+
+
+def generate_shot_list(classification: str) -> list:
+    """Return a standard shot list for a given scene classification."""
+    SHOTS = {
+        'ACTION':      ['Wide establishing shot', 'Handheld tracking shot',
+                        'Close-up — impact moment', 'Fast cut reaction shot'],
+        'DIALOGUE':    ['Shot-reverse-shot', 'Medium two-shot',
+                        'Close-up — emotional beats', 'Over-the-shoulder framing'],
+        'ATMOSPHERIC': ['Wide static shot', 'Slow pan',
+                        'Detail shot — environment', 'Long take'],
+        'EMOTIONAL':   ['Close-up — face', 'Extreme close-up — eyes/hands',
+                        'Slow dolly-in', 'Soft focus wide shot'],
+        'TRANSITION':  ['Match cut', 'Cross dissolve',
+                        'Symbolic insert shot', 'Wide transition frame'],
+        'EXPOSITION':  ['Master shot', 'Establishing wide',
+                        'Insert shot — detail', 'Slow pull-back'],
+    }
+    return SHOTS.get(classification, ['Wide shot', 'Medium shot', 'Close-up'])
+
+
+def detect_weak_scene(scene) -> list:
+    """Return list of issue strings, or [] if scene is strong."""
+    action = getattr(scene, 'action', '') or '' if not isinstance(scene, dict) else scene.get('action', '') or ''
+    mood   = getattr(scene, 'mood',   '') or '' if not isinstance(scene, dict) else scene.get('mood',   '') or ''
+    text = action + ' ' + mood
+    issues = []
+    if len(text.strip()) < 80:
+        issues.append('Underdeveloped — too short')
+    dramatic = ['runs', 'storm', 'fear', 'love', 'says', 'enters', 'cries', 'shouts', 'silence', 'alone']
+    if not any(w in text.lower() for w in dramatic):
+        issues.append('Low dramatic content')
+    return issues
+
+
+def build_director_insights(scenes) -> dict:
+    """Aggregate classification stats for the director dashboard."""
+    if not scenes:
+        return {}
+    total = len(scenes)
+    from collections import Counter
+    counts = Counter(getattr(s, 'classification', 'ATMOSPHERIC') for s in scenes)
+    weak_count = sum(1 for s in scenes if detect_weak_scene(s))
+    dominant = counts.most_common(1)[0][0]
+    emotional = counts.get('EMOTIONAL', 0) + counts.get('ATMOSPHERIC', 0)
+    action = counts.get('ACTION', 0)
+    pacing = 'contemplative' if emotional > action else 'dynamic' if action > emotional else 'balanced'
+    return {
+        'total': total,
+        'counts': dict(counts),
+        'weak': weak_count,
+        'dominant': dominant,
+        'pacing': pacing,
+        'emotional_ratio': round(emotional / total, 2),
+        'action_ratio': round(action / total, 2),
+        'strength': round(1 - (weak_count / total), 2),
+    }
+
+
+_REWRITE_STYLES = {
+    'Improve (general)':  'Improve emotional impact, cinematic clarity, and visual storytelling. Keep the original meaning.',
+    'Wong Kar-wai':       'Fragmented narration, poetic voiceover, emotional isolation, slow time perception, visual metaphors, minimal dialogue.',
+    'Tarkovsky':          'Long takes, natural textures, muted palette, philosophical tone, silence as meaning, spiritual weight.',
+    'Enhance emotion':    'Deepen emotional resonance, add subtext, reduce exposition, let characters reveal through action.',
+    'Cinematic action':   'Heighten physical tension, sharpen spatial clarity, punch up visual energy and kinetic rhythm.',
+}
+
+def rewrite_scene_ai(scene_text: str, style_label: str = 'Improve (general)') -> str:
+    """AI scene rewrite using GPT-4o-mini. Returns rewritten text or error string."""
+    if not openai_client:
+        return '❌ OpenAI client not available'
+    style_instruction = _REWRITE_STYLES.get(style_label, _REWRITE_STYLES['Improve (general)'])
+    try:
+        response = openai_client.chat.completions.create(
+            model='gpt-4o-mini',
+            messages=[
+                {
+                    'role': 'system',
+                    'content': (
+                        'You are a professional film script doctor. '
+                        'Rewrite the scene according to the given style instruction. '
+                        'Output only the rewritten scene — no commentary, no headings.'
+                    )
+                },
+                {
+                    'role': 'user',
+                    'content': f'Style: {style_instruction}\n\nScene:\n{scene_text[:1500]}'
+                }
+            ],
+            max_tokens=800,
+            temperature=0.75,
+        )
+        return response.choices[0].message.content.strip()
+    except Exception as e:
+        return f'❌ Rewrite failed: {e}'
+
 
 # ===========================================
 # Concept Image Generation (Wanxiang)
@@ -910,6 +1079,25 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+st.markdown("""
+<style>
+.stApp {
+    background: radial-gradient(circle at 50% 20%, #161616, #0b0b0b);
+    color: #f0ece4;
+}
+h1, h2, h3 { color: #f0ece4; font-weight: 400; letter-spacing: 0.02em; }
+.stButton > button {
+    background-color: #141414 !important;
+    border: 1px solid #2e2e2e !important;
+    border-radius: 8px !important;
+    color: #e8e2d8 !important;
+    transition: border-color 0.25s;
+}
+.stButton > button:hover { border-color: #d6c6a5 !important; }
+.stExpander { border: 1px solid #222 !important; border-radius: 8px !important; }
+</style>
+""", unsafe_allow_html=True)
 
 st.title("🎬 AI Studio Elsewhere")
 st.caption("云上电影工作室 · Beyond imagination, above the clouds — 云上。")
@@ -1238,24 +1426,43 @@ with tab_script:
 
             if uploaded_file.type == "application/pdf":
                 if PYMUPDF_AVAILABLE:
-                    # Fast path — PyMuPDF, first MAX_PAGES pages, cached
-                    st.info(f"📄 Extracting text (first {MAX_PAGES} pages)...")
-                    progress = st.progress(0)
-                    try:
-                        doc = fitz.open(stream=file_bytes, filetype="pdf")
-                        total = min(len(doc), MAX_PAGES)
-                        pages_text = []
-                        for i, page in enumerate(doc):
-                            if i >= MAX_PAGES:
-                                break
-                            page_text = page.get_text()
-                            if page_text.strip():
-                                pages_text.append(page_text)
-                            progress.progress((i + 1) / total)
-                        extracted_text = "\n".join(pages_text)
-                        progress.empty()
-                    except Exception as e:
-                        st.error(f"❌ PDF extraction failed: {e}")
+                    # Staged extraction — user chooses how much to process
+                    extraction_mode = st.radio(
+                        "How much of the script to extract?",
+                        options=["Quick preview (first 3 pages)", "Default (first 10 pages)", "Full script (all pages — slower)"],
+                        index=1,
+                        horizontal=True,
+                        key="extract_mode",
+                    )
+                    if extraction_mode.startswith("Quick"):
+                        pages_limit = 3
+                    elif extraction_mode.startswith("Full"):
+                        pages_limit = 9999
+                        st.warning("⚠️ Full extraction may take 10–30s for long scripts. AI scene parsing will also take longer.")
+                    else:
+                        pages_limit = MAX_PAGES
+
+                    if st.button("Extract Text", key="do_extract"):
+                        progress = st.progress(0)
+                        try:
+                            doc = fitz.open(stream=file_bytes, filetype="pdf")
+                            total = min(len(doc), pages_limit)
+                            pages_text = []
+                            for i, page in enumerate(doc):
+                                if i >= pages_limit:
+                                    break
+                                page_text = page.get_text()
+                                if page_text.strip():
+                                    pages_text.append(page_text)
+                                progress.progress((i + 1) / max(total, 1))
+                            extracted_text = "\n".join(pages_text)
+                            progress.empty()
+                            st.session_state[f"extracted_{selected_project}"] = extracted_text
+                        except Exception as e:
+                            st.error(f"❌ PDF extraction failed: {e}")
+                    # Use previously extracted text if available
+                    if not extracted_text:
+                        extracted_text = st.session_state.get(f"extracted_{selected_project}", "")
                 else:
                     # Legacy fallback — slow OCR path
                     st.info("📄 Processing PDF (slow path — install pymupdf for speed)...")
@@ -1342,34 +1549,59 @@ with tab_scenes:
             
             # Display scenes
             if project.scenes:
+                # ── Director Insights Dashboard ───────────────────────────────
+                insights = build_director_insights(project.scenes)
+                if insights:
+                    st.markdown("#### Director Insights")
+                    c1, c2, c3, c4 = st.columns(4)
+                    c1.metric("Scenes", insights['total'])
+                    c2.metric("Pacing", insights['pacing'].title())
+                    c3.metric("Dominant", insights['dominant'])
+                    c4.metric("Weak scenes", insights['weak'])
+                    st.progress(insights['strength'], text=f"Script strength: {int(insights['strength']*100)}%")
+                    # Classification breakdown
+                    if insights['counts']:
+                        breakdown = "  ·  ".join(f"{k}: {v}" for k, v in sorted(insights['counts'].items(), key=lambda x: -x[1]))
+                        st.caption(breakdown)
+                    st.markdown("---")
+
                 st.write(f"**{len(project.scenes)} scenes**")
 
                 for i, scene in enumerate(project.scenes):
-                    with st.expander(f"Scene {scene.scene_number}: {scene.heading}"):
-                        prompts = build_scene_prompts(scene)
-                        stype = prompts.get('scene_type', 'STANDARD')
-                        type_colors = {
-                            'INTERCUT': '#ffcc00',
-                            'FLASHBACK': '#66ccff',
-                            'MONTAGE': '#ff6699',
-                            'STANDARD': '#666666',
-                        }
-                        type_color = type_colors.get(stype, '#666666')
+                    # Ensure classification is set (handles scenes loaded from disk before this feature)
+                    if not getattr(scene, 'classification', ''):
+                        scene.classification = classify_scene(scene)
+                    prompts = build_scene_prompts(scene)
+                    issues  = detect_weak_scene(scene)
+                    stype   = prompts.get('scene_type', 'STANDARD')
+
+                    type_colors = {'INTERCUT': '#ffcc00', 'FLASHBACK': '#66ccff',
+                                   'MONTAGE': '#ff6699', 'STANDARD': '#666666'}
+                    cls_colors  = {'ACTION': '#ff6644', 'DIALOGUE': '#66aaff',
+                                   'ATMOSPHERIC': '#aaaaaa', 'EMOTIONAL': '#cc88ff',
+                                   'TRANSITION': '#ffcc44', 'EXPOSITION': '#88ccaa'}
+
+                    label = f"Scene {scene.scene_number}: {scene.heading}"
+                    if issues:
+                        label += "  ⚠️"
+
+                    with st.expander(label):
+                        # Badges row
+                        badges = []
                         if stype != 'STANDARD':
-                            st.markdown(
-                                f'<span style="background:{type_color};color:#000;'
-                                f'padding:2px 10px;border-radius:4px;font-size:0.75rem;'
-                                f'font-weight:600;letter-spacing:0.08em">{stype}</span>',
-                                unsafe_allow_html=True
-                            )
+                            tc = type_colors.get(stype, '#666')
+                            badges.append(f'<span style="background:{tc};color:#000;padding:2px 8px;border-radius:3px;font-size:0.7rem;font-weight:700">{stype}</span>')
+                        cc = cls_colors.get(scene.classification, '#aaa')
+                        badges.append(f'<span style="background:{cc};color:#000;padding:2px 8px;border-radius:3px;font-size:0.7rem;font-weight:700">{scene.classification}</span>')
+                        if badges:
+                            st.markdown(' &nbsp; '.join(badges), unsafe_allow_html=True)
+                            st.write('')
 
                         col1, col2 = st.columns(2)
-
                         with col1:
                             st.write(f"**Location:** {scene.location or prompts['location']}")
                             st.write(f"**Time:** {scene.time_of_day}")
                             st.write(f"**Mood:** {scene.mood or ', '.join(prompts['mood'])}")
-
                         with col2:
                             st.write(f"**Characters:** {', '.join(scene.characters) or 'None'}")
                             st.write(f"**Keywords:** {', '.join(scene.keywords)}")
@@ -1378,11 +1610,39 @@ with tab_scenes:
                         st.write("**Action:**")
                         st.write(scene.action)
 
+                        if issues:
+                            st.warning(f"Script doctor: {' · '.join(issues)}")
+
+                        # Shot list
+                        with st.expander("Shot list", expanded=False):
+                            for shot in generate_shot_list(scene.classification):
+                                st.write(f"• {shot}")
+
+                        # Cinematic prompts
                         with st.expander("Cinematic prompts", expanded=False):
                             st.text_area("Visual prompt", prompts['visual_prompt'], height=68,
                                          key=f"vp_{i}", label_visibility="visible")
                             st.text_area("Video prompt", prompts['video_prompt'], height=68,
                                          key=f"vvp_{i}", label_visibility="visible")
+
+                        # AI rewrite
+                        with st.expander("Rewrite with AI", expanded=False):
+                            style_choice = st.selectbox(
+                                "Style",
+                                options=list(_REWRITE_STYLES.keys()),
+                                key=f"rwstyle_{i}"
+                            )
+                            if st.button("Rewrite scene", key=f"rw_{i}"):
+                                with st.spinner("Rewriting..."):
+                                    rewritten = rewrite_scene_ai(scene.action, style_choice)
+                                st.markdown("**Rewritten version:**")
+                                col_orig, col_new = st.columns(2)
+                                with col_orig:
+                                    st.caption("Original")
+                                    st.write(scene.action[:600])
+                                with col_new:
+                                    st.caption(f"{style_choice}")
+                                    st.write(rewritten)
 
 # ===========================================
 # Tab: Concept Images
