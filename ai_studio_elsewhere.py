@@ -1756,8 +1756,43 @@ with tab_concepts:
                                     with cols[j % 2]:
                                         try:
                                             st.image(img_path, caption=f"Concept {j+1}")
+                                            img_bytes = Path(img_path).read_bytes() if Path(img_path).exists() else None
+                                            if img_bytes:
+                                                st.download_button(
+                                                    label="⬇ Download",
+                                                    data=img_bytes,
+                                                    file_name=f"{scene.scene_id}_concept_{j+1}.png",
+                                                    mime="image/png",
+                                                    key=f"dl_new_{scene.scene_id}_{j}",
+                                                )
                                         except Exception:
                                             st.write(f"[Image {j+1}]({img_path})")
+
+            # ── Show previously generated concepts ───────────────────────────
+            if project.concepts:
+                st.markdown("---")
+                st.markdown("#### Previously Generated Concepts")
+                for scene in project.scenes:
+                    paths = project.concepts.get(scene.scene_id, [])
+                    if not paths:
+                        continue
+                    st.markdown(f"**{scene.heading}**")
+                    cols = st.columns(min(len(paths), 4))
+                    for j, img_path in enumerate(paths[:4]):
+                        with cols[j]:
+                            try:
+                                st.image(img_path, caption=f"Concept {j+1}")
+                                p = Path(img_path)
+                                if p.exists():
+                                    st.download_button(
+                                        label="⬇ Download",
+                                        data=p.read_bytes(),
+                                        file_name=f"{scene.scene_id}_concept_{j+1}.png",
+                                        mime="image/png",
+                                        key=f"dl_saved_{scene.scene_id}_{j}",
+                                    )
+                            except Exception:
+                                st.write(f"[Image {j+1}]({img_path})")
 
 # ===========================================
 # Tab: Video Generation
