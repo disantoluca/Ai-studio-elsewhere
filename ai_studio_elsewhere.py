@@ -1114,7 +1114,10 @@ if st.sidebar.button("🔄 Refresh Projects"):
 
 projects = list_projects()
 if projects:
-    selected_project = st.sidebar.selectbox("Select a project", projects)
+    active = st.session_state.get('active_project', projects[0])
+    default_idx = projects.index(active) if active in projects else 0
+    selected_project = st.sidebar.selectbox("Select a project", projects, index=default_idx)
+    st.session_state['active_project'] = selected_project
     st.sidebar.success(f"✅ {len(projects)} project(s) found")
 else:
     selected_project = None
@@ -1378,8 +1381,10 @@ with tab_new_project:
                 script_path=None
             )
             save_project(project)
+            st.session_state['active_project'] = project_id
             st.balloons()
             st.success(f"✅ Project created: {title_en}")
+            st.rerun()
 
 # ===========================================
 # Tab: Script Upload
