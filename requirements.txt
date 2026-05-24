@@ -9,3 +9,4 @@ googlemaps
 reportlab>=4.0.0
 dashscope>=1.14.0
 runwayml
+pymupdf>=1.23.0

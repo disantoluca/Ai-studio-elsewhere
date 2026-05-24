@@ -224,6 +224,16 @@ except ImportError:
     EASYOCR_AVAILABLE = False
     _ocr_reader = None
 
+# PyMuPDF — fast PDF text extraction (preferred path)
+try:
+    import fitz  # PyMuPDF
+    PYMUPDF_AVAILABLE = True
+except ImportError:
+    print("⚠️ PyMuPDF not available. Install: pip install pymupdf")
+    PYMUPDF_AVAILABLE = False
+
+MAX_PAGES = 10  # Process only first N pages — 80-90% speed gain
+
 # Vision for image analysis (Phase 2 - optional)
 try:
     from transformers import AutoProcessor, AutoModelForVision2Seq
@@ -363,6 +373,43 @@ def extract_pages_from_pdf(pdf_path: str) -> Tuple[List[Image.Image], List[str]]
     except Exception as e:
         st.error(f"❌ PDF extraction failed: {e}")
         return [], []
+
+@st.cache_data(show_spinner=False)
+def extract_text_fast(file_bytes: bytes) -> str:
+    """Fast PDF text extraction using PyMuPDF. Cached — same file never processed twice."""
+    if not PYMUPDF_AVAILABLE:
+        return ""
+    try:
+        doc = fitz.open(stream=file_bytes, filetype="pdf")
+        text = ""
+        for i, page in enumerate(doc):
+            if i >= MAX_PAGES:
+                break
+            page_text = page.get_text()
+            if page_text.strip():
+                text += page_text
+        return text
+    except Exception as e:
+        print(f"❌ PyMuPDF error: {e}")
+        return ""
+
+def stream_scenes_from_text(text: str, max_pages: int = MAX_PAGES):
+    """
+    Generator: yields raw scene dicts as regex finds INT./EXT. headers.
+    Instant — no API. Used to show structure before GPT enrichment.
+    """
+    import re
+    chunks = re.split(r'(?=\n(?:INT\.|EXT\.))', text)
+    for i, chunk in enumerate(chunks):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        lines = chunk.split('\n')
+        heading = lines[0].strip()
+        if not (heading.startswith('INT.') or heading.startswith('EXT.')):
+            continue
+        action = ' '.join(l.strip() for l in lines[1:6] if l.strip())
+        yield {"id": i, "heading": heading, "action": action[:200]}
 
 # ===========================================
 # Translation & Text Processing
@@ -528,6 +575,82 @@ def parse_script_to_scenes(text: str, translate: bool = False) -> List[SceneBrea
     except Exception as e:
         st.error(f"❌ Scene parsing failed: {e}")
         return []
+
+# ===========================================
+# Scene Prompt Auto-Builder
+# ===========================================
+
+def build_scene_prompts(scene) -> dict:
+    """
+    Rule-based cinematic prompt builder. Instant — no API.
+    Returns visual_prompt, video_prompt, mood, location, camera.
+    """
+    heading = getattr(scene, 'heading', '') if not isinstance(scene, dict) else scene.get('heading', '')
+    action  = getattr(scene, 'action',  '') if not isinstance(scene, dict) else scene.get('action',  '')
+    mood_in = getattr(scene, 'mood',    '') if not isinstance(scene, dict) else scene.get('mood',    '')
+    loc_in  = getattr(scene, 'location','') if not isinstance(scene, dict) else scene.get('location','')
+
+    text = (heading + ' ' + action + ' ' + mood_in).lower()
+
+    # Location
+    if loc_in:
+        location = loc_in
+    elif 'tram' in text or 'train' in text:
+        location = 'night tram interior'
+    elif 'street' in text or 'alley' in text:
+        location = 'urban street at night'
+    elif 'room' in text or 'apartment' in text or 'int.' in text:
+        location = 'interior room'
+    elif 'ext.' in text:
+        location = 'exterior environment'
+    else:
+        location = 'cinematic environment'
+
+    # Mood
+    mood = []
+    if mood_in:
+        mood.append(mood_in)
+    if 'night' in text:
+        mood.append('dark')
+    if 'alone' in text or 'empty' in text:
+        mood.append('lonely')
+    if 'memory' in text or 'past' in text or 'remember' in text:
+        mood.append('nostalgic')
+    if 'dream' in text or 'surreal' in text:
+        mood.append('dreamlike')
+    if not mood:
+        mood = ['cinematic', 'emotional']
+    mood = list(dict.fromkeys(mood))  # dedupe, preserve order
+
+    mood_str = ', '.join(mood)
+    visual_prompt = (
+        f"{location}, {mood_str}, cinematic lighting, soft shadows, "
+        f"film still, shallow depth of field, poetic realism"
+    )
+    video_prompt = (
+        f"{location}, {mood_str}, cinematic motion, slow camera movement, "
+        f"realistic lighting, film scene, subtle emotion"
+    )
+
+    # Camera
+    if 'walk' in text or 'enter' in text or 'move' in text:
+        camera = 'slow dolly-in'
+    elif 'look' in text or 'see' in text or 'watch' in text:
+        camera = 'close-up'
+    elif 'memory' in text or 'dream' in text:
+        camera = 'floating camera'
+    else:
+        camera = 'static cinematic shot'
+
+    video_prompt += f', {camera}'
+
+    return {
+        'location': location,
+        'mood': mood,
+        'visual_prompt': visual_prompt,
+        'video_prompt': video_prompt,
+        'camera': camera,
+    }
 
 # ===========================================
 # Concept Image Generation (Wanxiang)
@@ -1016,41 +1139,56 @@ with tab_script:
         
         if uploaded_file:
             st.write(f"**File:** {uploaded_file.name}")
-            
+
+            # Read bytes once — used for both save and extraction
+            file_bytes = uploaded_file.read()
+
             # Save uploaded file
             script_path = SCRIPTS_DIR / f"{selected_project}_script_{uploaded_file.name}"
             with open(script_path, "wb") as f:
-                f.write(uploaded_file.read())
-            
+                f.write(file_bytes)
+
             st.success(f"✅ File saved: {uploaded_file.name}")
-            
+
             # Extract text based on file type
             extracted_text = ""
-            
+
             if uploaded_file.type == "application/pdf":
-                st.info("📄 Processing PDF...")
-                images, page_paths = extract_pages_from_pdf(str(script_path))
-                
-                if images:
-                    st.write(f"Extracted {len(images)} pages")
-                    
-                    # OCR first page for preview
-                    if page_paths:
-                        preview_text = extract_text_from_image(page_paths[0])
-                        if preview_text:
-                            st.write("**Preview of extracted text:**")
-                            st.text(preview_text[:500])
-                        
-                        # Extract from all pages
-                        all_text = []
-                        for page_path in page_paths:
-                            text = extract_text_from_image(page_path)
-                            if text:
-                                all_text.append(text)
-                        extracted_text = "\n".join(all_text)
-            
+                if PYMUPDF_AVAILABLE:
+                    # Fast path — PyMuPDF, first MAX_PAGES pages, cached
+                    st.info(f"📄 Extracting text (first {MAX_PAGES} pages)...")
+                    progress = st.progress(0)
+                    try:
+                        doc = fitz.open(stream=file_bytes, filetype="pdf")
+                        total = min(len(doc), MAX_PAGES)
+                        pages_text = []
+                        for i, page in enumerate(doc):
+                            if i >= MAX_PAGES:
+                                break
+                            page_text = page.get_text()
+                            if page_text.strip():
+                                pages_text.append(page_text)
+                            progress.progress((i + 1) / total)
+                        extracted_text = "\n".join(pages_text)
+                        progress.empty()
+                    except Exception as e:
+                        st.error(f"❌ PDF extraction failed: {e}")
+                else:
+                    # Legacy fallback — slow OCR path
+                    st.info("📄 Processing PDF (slow path — install pymupdf for speed)...")
+                    images, page_paths = extract_pages_from_pdf(str(script_path))
+                    if images:
+                        st.write(f"Extracted {len(images)} pages")
+                        if page_paths:
+                            all_text = []
+                            for page_path in page_paths:
+                                text = extract_text_from_image(page_path)
+                                if text:
+                                    all_text.append(text)
+                            extracted_text = "\n".join(all_text)
+
             elif uploaded_file.type == "text/plain":
-                extracted_text = uploaded_file.getvalue().decode("utf-8")
+                extracted_text = file_bytes.decode("utf-8")
             
             if extracted_text:
                 st.write(f"**Total extracted: {len(extracted_text)} characters**")
@@ -1081,49 +1219,71 @@ with tab_scenes:
             
             if project.script_path:
                 if st.button("🔍 Analyze Script → Extract Scenes", type="primary", use_container_width=True):
-                    with st.spinner("Parsing script..."):
-                        # Read script
-                        script_text = ""
-                        script_path = Path(project.script_path)
-                        
-                        if script_path.suffix == ".pdf":
-                            images, page_paths = extract_pages_from_pdf(str(script_path))
-                            for page_path in page_paths:
-                                script_text += extract_text_from_image(page_path) + "\n"
-                        elif script_path.suffix == ".txt":
-                            script_text = script_path.read_text(encoding="utf-8")
-                        
-                        # Parse to scenes
-                        if script_text:
+                    script_path = Path(project.script_path)
+                    script_text = ""
+
+                    # Step 1: fast text extraction
+                    if script_path.suffix == ".pdf" and PYMUPDF_AVAILABLE:
+                        with st.spinner("Extracting script text..."):
+                            script_text = extract_text_fast(script_path.read_bytes())
+                    elif script_path.suffix == ".pdf":
+                        images, page_paths = extract_pages_from_pdf(str(script_path))
+                        for page_path in page_paths:
+                            script_text += extract_text_from_image(page_path) + "\n"
+                    elif script_path.suffix == ".txt":
+                        script_text = script_path.read_text(encoding="utf-8")
+
+                    if script_text:
+                        preview_slot = None
+                        quick_scenes = list(stream_scenes_from_text(script_text))
+                        if quick_scenes:
+                            st.markdown("*Scene structure detected — enriching with AI...*")
+                            preview_slot = st.empty()
+                            with preview_slot.container():
+                                for qs in quick_scenes[:5]:
+                                    st.caption(f"🎬 {qs['heading']}")
+
+                        # Step 3: full GPT enrichment
+                        with st.spinner("Extracting scenes..."):
                             scenes = parse_script_to_scenes(script_text)
                             project.scenes = scenes
                             save_project(project)
-                            st.success(f"✅ Extracted and translated {len(scenes)} scenes")
-                            st.rerun()  # Refresh to show scenes immediately
-                        else:
-                            st.error("❌ Could not extract text from script")
+                        if preview_slot:
+                            preview_slot.empty()
+                        st.success(f"✅ {len(scenes)} scenes extracted")
+                        st.rerun()
+                    else:
+                        st.error("❌ Could not extract text from script")
             elif project.scenes:
                 st.success(f"✅ {len(project.scenes)} scenes pre-loaded (demo project)")
             
             # Display scenes
             if project.scenes:
-                st.write(f"**Scenes: {len(project.scenes)}**")
-                
+                st.write(f"**{len(project.scenes)} scenes**")
+
                 for i, scene in enumerate(project.scenes):
+                    prompts = build_scene_prompts(scene)
                     with st.expander(f"Scene {scene.scene_number}: {scene.heading}"):
                         col1, col2 = st.columns(2)
-                        
+
                         with col1:
-                            st.write(f"**Location:** {scene.location}")
+                            st.write(f"**Location:** {scene.location or prompts['location']}")
                             st.write(f"**Time:** {scene.time_of_day}")
-                            st.write(f"**Mood:** {scene.mood}")
-                        
+                            st.write(f"**Mood:** {scene.mood or ', '.join(prompts['mood'])}")
+
                         with col2:
                             st.write(f"**Characters:** {', '.join(scene.characters) or 'None'}")
                             st.write(f"**Keywords:** {', '.join(scene.keywords)}")
-                        
+                            st.caption(f"Camera: {prompts['camera']}")
+
                         st.write("**Action:**")
                         st.write(scene.action)
+
+                        with st.expander("Cinematic prompts", expanded=False):
+                            st.text_area("Visual prompt", prompts['visual_prompt'], height=68,
+                                         key=f"vp_{i}", label_visibility="visible")
+                            st.text_area("Video prompt", prompts['video_prompt'], height=68,
+                                         key=f"vvp_{i}", label_visibility="visible")
 
 # ===========================================
 # Tab: Concept Images
