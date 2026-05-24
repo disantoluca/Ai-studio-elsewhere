@@ -1005,6 +1005,8 @@ def load_project(project_id: str) -> Optional[Project]:
                         image_paths=s.get("image_paths", []),
                         keywords=s.get("keywords", []),
                         mood=s.get("mood", ""),
+                        classification=s.get("classification", ""),
+                        scene_type=s.get("scene_type", "STANDARD"),
                     ))
         
         # Restore concepts
@@ -1055,6 +1057,8 @@ def save_project(project: Project):
                 "image_paths": s.image_paths,
                 "keywords": s.keywords,
                 "mood": s.mood,
+                "classification": getattr(s, 'classification', ''),
+                "scene_type": getattr(s, 'scene_type', 'STANDARD'),
             }
             for s in project.scenes
         ],
@@ -1065,7 +1069,6 @@ def save_project(project: Project):
     try:
         with open(proj_file, 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
-        st.success(f"✅ Project saved: {project.title_en}")
     except Exception as e:
         st.error(f"❌ Failed to save project: {e}")
 
@@ -1546,7 +1549,6 @@ with tab_scenes:
                         if preview_slot:
                             preview_slot.empty()
                         st.success(f"✅ {len(scenes)} scenes extracted")
-                        st.rerun()
                     else:
                         st.error("❌ Could not extract text from script")
             elif project.scenes:
