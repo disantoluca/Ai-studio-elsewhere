@@ -352,7 +352,7 @@ def display_video_generation_tab(scenes: List[Dict], project_title: str):
 
             if st.button("🎞 Stitch Clips → Scene Video", use_container_width=True, key="dir_stitch"):
                 if not _ffmpeg_available():
-                    st.warning("⚠️ ffmpeg not installed — `brew install ffmpeg`")
+                    st.warning("⚠️ ffmpeg not available on this server")
                 elif not video_paths:
                     st.warning("⚠️ Clips are streaming URLs — download them first to assemble locally.")
                 else:
