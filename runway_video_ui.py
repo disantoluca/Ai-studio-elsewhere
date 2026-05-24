@@ -8,6 +8,7 @@ Integrates with runway_video_agent.py
 """
 
 import streamlit as st
+from pathlib import Path
 from typing import Optional, List, Dict
 import logging
 
@@ -111,14 +112,23 @@ def display_video_generation_tab(scenes: List[Dict], project_title: str):
         
         # Show concept image if available
         concept_image = scene.get("concept_image")
+        concept_image_path = scene.get("concept_image_path")
         if concept_image:
             st.write("**Reference Image (from Concept Art):**")
             try:
-                import requests as req
-                img_response = req.get(concept_image, timeout=10)
-                st.image(img_response.content, width=400, caption="This concept image will be used as input for video generation")
-            except:
-                st.info(f"Concept image available: {concept_image[:60]}...")
+                # concept_image_path is local file, concept_image is base64 data URI
+                if concept_image_path and Path(concept_image_path).exists():
+                    st.image(concept_image_path, width=400, caption="This concept image will be used as input for video generation")
+                elif concept_image.startswith("data:"):
+                    import base64 as _b64
+                    img_bytes = _b64.b64decode(concept_image.split(",", 1)[1])
+                    st.image(img_bytes, width=400, caption="This concept image will be used as input for video generation")
+                else:
+                    import requests as req
+                    img_response = req.get(concept_image, timeout=10)
+                    st.image(img_response.content, width=400, caption="This concept image will be used as input for video generation")
+            except Exception:
+                st.info("Concept image ready for video generation")
         else:
             st.warning("⚠️ No concept image found for this scene. Generate concept art first (Concept Images tab) for best video results.")
         

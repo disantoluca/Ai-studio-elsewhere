@@ -930,48 +930,60 @@ def rewrite_scene_ai(scene_text: str, style_label: str = 'Improve (general)') ->
 # Concept Image Generation (Wanxiang)
 # ===========================================
 
-def generate_concept_images(scene: SceneBreakdown, style: str = "cinematic") -> List[str]:
+def generate_concept_images(scene: SceneBreakdown, style: str = "cinematic", project_id: str = "") -> List[str]:
     """
     Generate concept images for a scene using Wanxiang.
-    Returns list of image URLs.
+    Downloads images to CONCEPTS_DIR and returns local file paths.
     """
     if not WANX_AVAILABLE or not os.getenv("DASHSCOPE_API_KEY"):
         st.warning("⚠️ Wanxiang API not configured. Skipping image generation.")
         return []
-    
+
     try:
         from tongyi_wanx_client import TongyiWanxClient
         client = TongyiWanxClient()
-        
-        # Compose prompt from scene
+
         prompt = f"""
         Film scene concept art:
-        
+
         Scene: {scene.heading}
         Location: {scene.location}
         Time: {scene.time_of_day}
         Mood: {scene.mood}
         Keywords: {", ".join(scene.keywords)}
-        
+
         Action: {scene.action[:200]}
-        
+
         Style: {style}
         Generate cinematic concept art for this scene.
         """
-        
-        # Generate image using Wanxiang
+
         result = client.generate_image(
             prompt=prompt,
             negative_prompt="blurry, watermark, low quality",
             seed=None
         )
-        
+
         if result.get('status') == 'succeeded' and result.get('images'):
-            return result['images']  # List of image URLs
+            urls = result['images']
+            # Download immediately — Wanxiang URLs are temporary
+            concept_dir = CONCEPTS_DIR / (project_id or "default")
+            concept_dir.mkdir(parents=True, exist_ok=True)
+            local_paths = []
+            for j, url in enumerate(urls):
+                safe_id = scene.scene_id.replace('/', '_')
+                local_path = concept_dir / f"{safe_id}_{j}.png"
+                try:
+                    img_data = requests.get(url, timeout=15).content
+                    local_path.write_bytes(img_data)
+                    local_paths.append(str(local_path))
+                except Exception:
+                    local_paths.append(url)  # keep URL as fallback
+            return local_paths
         else:
             st.warning(f"⚠️ Image generation failed: {result.get('error', 'Unknown error')}")
             return []
-    
+
     except Exception as e:
         st.error(f"❌ Concept generation error: {e}")
         return []
@@ -1731,23 +1743,21 @@ with tab_concepts:
                         scene = project.scenes[scene_idx]
                         
                         with st.spinner(f"Generating concepts for {scene_label}..."):
-                            images = generate_concept_images(scene, style.lower())
-                            
+                            images = generate_concept_images(scene, style.lower(), project_id=project.project_id)
+
                             if images:
                                 project.concepts[scene.scene_id] = images
                                 save_project(project)
-                                
+
                                 st.success(f"✅ Generated {len(images)} concepts")
-                                
-                                # Display images
+
                                 cols = st.columns(2)
-                                for j, img_url in enumerate(images[:4]):
+                                for j, img_path in enumerate(images[:4]):
                                     with cols[j % 2]:
                                         try:
-                                            response = requests.get(img_url, timeout=10)
-                                            st.image(response.content, caption=f"Concept {j+1}")
-                                        except:
-                                            st.write(f"[Image {j+1}]({img_url})")
+                                            st.image(img_path, caption=f"Concept {j+1}")
+                                        except Exception:
+                                            st.write(f"[Image {j+1}]({img_path})")
 
 # ===========================================
 # Tab: Video Generation
@@ -1795,12 +1805,26 @@ with tab_video:
             st.warning("⚠️ Extract scenes first (Scene Breakdown tab)")
         else:
             # Convert scenes to format for video generation
+            def _concept_for_runway(scene_id: str) -> Optional[str]:
+                """Return concept image as local path (display) or base64 data URI (Runway API)."""
+                paths = project.concepts.get(scene_id, [])
+                if not paths:
+                    return None
+                path = paths[0]
+                p = Path(path)
+                if p.exists():
+                    import base64
+                    data = base64.b64encode(p.read_bytes()).decode()
+                    return f"data:image/png;base64,{data}"
+                return path  # fall back to URL if local file missing
+
             scenes_for_video = [
                 {
                     "id": scene.scene_id,
                     "heading": scene.heading,
                     "prompt": f"{scene.heading}. Location: {scene.location}. Time: {scene.time_of_day}. Mood: {scene.mood}. Action: {scene.action[:100]}",
-                    "concept_image": project.concepts.get(scene.scene_id, [None])[0]
+                    "concept_image": _concept_for_runway(scene.scene_id),
+                    "concept_image_path": (project.concepts.get(scene.scene_id) or [None])[0],
                 }
                 for scene in project.scenes
             ]
