@@ -1984,8 +1984,8 @@ with tab_video:
             try:
                 from runway_video_ui import display_video_generation_tab
                 display_video_generation_tab(scenes_for_video, project.title_en)
-            except ImportError:
-                st.warning("⚠️ Runway video module not connected — showing demo mode")
+            except Exception as _video_err:
+                st.error(f"⚠️ Video module error: {_video_err}")
                 st.markdown("---")
                 
                 # Demo fallback: let directors preview workflow without API
