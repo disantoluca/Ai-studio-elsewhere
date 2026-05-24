@@ -1011,16 +1011,21 @@ def generate_video_scene(scene: SceneBreakdown, concept_image_url: Optional[str]
 # ===========================================
 
 DATABASE_URL = os.getenv("DATABASE_URL")
+_db_error: str = ""
 
 
 def _get_db_conn():
+    global _db_error
     if not DATABASE_URL:
+        _db_error = "DATABASE_URL not set"
         return None
     try:
         import psycopg2
         conn = psycopg2.connect(DATABASE_URL)
+        _db_error = ""
         return conn
-    except Exception:
+    except Exception as e:
+        _db_error = str(e)
         return None
 
 
@@ -1247,6 +1252,14 @@ st.caption("云上电影工作室 · Beyond imagination, above the clouds — �
 # ===========================================
 
 st.sidebar.header("🎬 Film Projects")
+
+# Storage status
+if DATABASE_URL and not _db_error:
+    st.sidebar.caption("💾 PostgreSQL connected")
+elif DATABASE_URL and _db_error:
+    st.sidebar.warning(f"⚠️ DB error: {_db_error}")
+else:
+    st.sidebar.warning("⚠️ DATABASE_URL not set — projects won't persist")
 
 # Force refresh project list
 if st.sidebar.button("🔄 Refresh Projects"):
