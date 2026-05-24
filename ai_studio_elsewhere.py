@@ -853,14 +853,9 @@ def generate_shot_list(classification: str) -> list:
 def detect_weak_scene(scene) -> list:
     """Return list of issue strings, or [] if scene is strong."""
     action = getattr(scene, 'action', '') or '' if not isinstance(scene, dict) else scene.get('action', '') or ''
-    mood   = getattr(scene, 'mood',   '') or '' if not isinstance(scene, dict) else scene.get('mood',   '') or ''
-    text = action + ' ' + mood
     issues = []
-    if len(text.strip()) < 80:
-        issues.append('Underdeveloped — too short')
-    dramatic = ['runs', 'storm', 'fear', 'love', 'says', 'enters', 'cries', 'shouts', 'silence', 'alone']
-    if not any(w in text.lower() for w in dramatic):
-        issues.append('Low dramatic content')
+    if len(action.strip()) < 15:
+        issues.append('Scene needs development')
     return issues
 
 
@@ -1656,8 +1651,16 @@ with tab_scenes:
 
                         # Shot list
                         with st.expander("Shot list", expanded=False):
-                            for shot in generate_shot_list(scene.classification):
-                                st.write(f"• {shot}")
+                            shot_options = generate_shot_list(scene.classification)
+                            selected_shot = st.radio(
+                                "Select shot to queue for video:",
+                                shot_options,
+                                key=f"shotlist_{i}",
+                                label_visibility="collapsed",
+                            )
+                            if st.button("→ Queue this shot for video", key=f"qshot_{i}"):
+                                st.session_state[f"queued_shot_{scene.scene_id}"] = selected_shot
+                                st.success(f"Queued: {selected_shot}")
 
                         # Cinematic prompts
                         with st.expander("Cinematic prompts", expanded=False):
@@ -1668,22 +1671,25 @@ with tab_scenes:
 
                         # AI rewrite
                         with st.expander("Rewrite with AI", expanded=False):
-                            style_choice = st.selectbox(
-                                "Style",
-                                options=list(_REWRITE_STYLES.keys()),
-                                key=f"rwstyle_{i}"
-                            )
-                            if st.button("Rewrite scene", key=f"rw_{i}"):
-                                with st.spinner("Rewriting..."):
-                                    rewritten = rewrite_scene_ai(scene.action, style_choice)
-                                st.markdown("**Rewritten version:**")
-                                col_orig, col_new = st.columns(2)
-                                with col_orig:
-                                    st.caption("Original")
-                                    st.write(scene.action[:600])
-                                with col_new:
-                                    st.caption(f"{style_choice}")
-                                    st.write(rewritten)
+                            if not openai_client:
+                                st.info("Add OPENAI_API_KEY to Railway environment variables to enable AI rewrite.")
+                            else:
+                                style_choice = st.selectbox(
+                                    "Style",
+                                    options=list(_REWRITE_STYLES.keys()),
+                                    key=f"rwstyle_{i}"
+                                )
+                                if st.button("Rewrite scene", key=f"rw_{i}"):
+                                    with st.spinner("Rewriting..."):
+                                        rewritten = rewrite_scene_ai(scene.action, style_choice)
+                                    st.markdown("**Rewritten version:**")
+                                    col_orig, col_new = st.columns(2)
+                                    with col_orig:
+                                        st.caption("Original")
+                                        st.write(scene.action[:600])
+                                    with col_new:
+                                        st.caption(f"{style_choice}")
+                                        st.write(rewritten)
 
 # ===========================================
 # Tab: Concept Images
