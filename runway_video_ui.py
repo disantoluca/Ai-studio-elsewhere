@@ -192,3 +192,317 @@ def _timeline_bar(shots: List[Dict], generated: Dict) -> str:
         bar += ("█" if filled else "░") * 4 + " "
     return bar.strip()
 
+
+# ============================================================
+# MAIN UI
+# ============================================================
+
+def display_video_generation_tab(scenes: List[Dict], project_title: str):
+    """Main video generation interface — Director Mode first."""
+
+    if not RUNWAY_AVAILABLE:
+        st.error("❌ Runway Video Agent not loaded — check runway_video_agent.py")
+        return
+
+    st.header("🎬 AI Film Director")
+
+    if not scenes:
+        st.warning("⚠️ No scenes available. Extract scenes first.")
+        return
+
+    agent = get_runway_agent()
+
+    if not agent.available:
+        st.warning("⚠️ Runway API not configured. Add RUNWAY_API_KEY to Railway environment.")
+        return
+
+    tab_director, tab_single, tab_batch = st.tabs([
+        "🎬 Director Mode",
+        "🎥 Single Shot",
+        "📹 Batch",
+    ])
+
+    # ── Director Mode ─────────────────────────────────────────
+
+    with tab_director:
+        st.subheader("🎬 Director Mode — Multi-Shot Scene Pipeline")
+
+        col1, col2 = st.columns([2, 1])
+        with col1:
+            scene_options = {f"Scene {i+1}: {s.get('heading','Untitled')}": i for i, s in enumerate(scenes)}
+            selected_label = st.selectbox("Select Scene", list(scene_options.keys()), key="dir_scene")
+            scene = scenes[scene_options[selected_label]]
+        with col2:
+            director_style = st.selectbox("Director Style", list(_DIRECTOR_STYLES.keys()), key="dir_style")
+
+        concept_path = scene.get("concept_image_path")
+        if concept_path and Path(concept_path).exists():
+            st.image(concept_path, width=600, caption="Reference frame")
+
+        shots = generate_shot_sequence(scene)
+
+        st.markdown("#### Shot Sequence")
+        cols = st.columns(4)
+        for i, shot in enumerate(shots):
+            with cols[i]:
+                st.markdown(f"**{shot['label']}**")
+                st.caption(shot["type"].upper())
+
+        with st.expander("Shot Control Panel"):
+            for shot in shots:
+                st.markdown(f"**{shot['label']} — {shot['type'].upper()}**")
+                c1, c2 = st.columns(2)
+                with c1:
+                    shot["camera"] = st.selectbox(
+                        "Camera",
+                        ["Slow dolly forward", "Push-in", "Static", "Handheld", "Pull-back", "Orbit"],
+                        key=f"cam_{shot['type']}",
+                    )
+                with c2:
+                    shot["lighting"] = st.selectbox(
+                        "Lighting",
+                        ["Natural", "Dramatic", "Low-key", "High contrast", "Soft diffuse"],
+                        key=f"lit_{shot['type']}",
+                    )
+                st.divider()
+
+        with st.expander("Preview Prompts"):
+            for shot in shots:
+                st.markdown(f"**{shot['label']}**")
+                prompt = build_cinematic_video_prompt(scene, shot, director_style)
+                st.text_area("", prompt, height=120, key=f"prompt_prev_{shot['type']}", disabled=True)
+
+        clips_key = f"dir_clips_{scene.get('id','scene')}"
+        if clips_key not in st.session_state:
+            st.session_state[clips_key] = {}
+        generated = st.session_state[clips_key]
+
+        st.markdown("#### Timeline")
+        st.markdown(f"`{_timeline_bar(shots, generated)}`")
+        st.caption("  ".join(f"`{s['label'][:4]}`" for s in shots))
+
+        if st.button("🎬 Generate Shot Sequence", type="primary", use_container_width=True, key="dir_gen"):
+            concept_image = scene.get("concept_image")
+            if not concept_image:
+                st.error("❌ Generate concept art first — Runway requires a reference image.")
+            else:
+                progress = st.progress(0, text="Starting shot sequence...")
+                for idx, shot in enumerate(shots):
+                    progress.progress(idx / len(shots), text=f"Generating {shot['label']} shot...")
+                    prompt = build_cinematic_video_prompt(scene, shot, director_style)
+                    request = VideoGenRequest(
+                        scene_id=f"{scene.get('id','scene')}_{shot['type']}",
+                        scene_heading=f"{scene.get('heading','')} — {shot['label']}",
+                        prompt_en=prompt,
+                        motion_type=None,
+                        style=director_style.lower(),
+                        duration=5,
+                        prompt_image=concept_image,
+                        notes=f"{project_title} / Director Mode",
+                    )
+                    result = agent.generate_video(request)
+                    if result.video_url:
+                        generated[shot["type"]] = result.video_url
+                        st.session_state[clips_key] = generated
+                progress.progress(1.0, text="All shots generated.")
+                st.success(f"✅ {len(generated)} shots generated")
+                st.rerun()
+
+        if generated:
+            st.markdown("#### Generated Clips")
+            clip_cols = st.columns(min(len(generated), 4))
+            video_paths = []
+            for i, shot in enumerate(shots):
+                stype = shot["type"]
+                if stype not in generated:
+                    continue
+                url = generated[stype]
+                with clip_cols[i % 4]:
+                    st.caption(shot["label"])
+                    if Path(url).exists():
+                        st.video(url)
+                        video_paths.append(url)
+                    else:
+                        st.info(f"📹 {url[:60]}…")
+
+            st.markdown(f"`{_timeline_bar(shots, generated)}`")
+
+            st.markdown("#### Color Grade")
+            c1, c2 = st.columns([2, 1])
+            with c1:
+                grade_choice = st.selectbox("Grade", list(COLOR_GRADES.keys()), key="dir_grade")
+            with c2:
+                apply_grade = st.button("🎨 Apply Grade", key="dir_apply_grade")
+
+            if apply_grade and grade_choice != "None":
+                if not _ffmpeg_available():
+                    st.warning("⚠️ ffmpeg not installed")
+                elif not video_paths:
+                    st.warning("⚠️ No local video files to grade")
+                else:
+                    grade_filter = COLOR_GRADES[grade_choice]
+                    graded = []
+                    for vp in video_paths:
+                        out = vp.replace(".mp4", "_graded.mp4")
+                        result = apply_color_grade(vp, grade_filter, out)
+                        if result:
+                            graded.append(result)
+                    if graded:
+                        st.success(f"✅ Graded {len(graded)} clips")
+
+            if st.button("🎞 Stitch Clips → Scene Video", use_container_width=True, key="dir_stitch"):
+                if not _ffmpeg_available():
+                    st.warning("⚠️ ffmpeg not installed — `brew install ffmpeg`")
+                elif not video_paths:
+                    st.warning("⚠️ Clips are streaming URLs — download them first to assemble locally.")
+                else:
+                    output = str(Path(video_paths[0]).parent / f"scene_{scene.get('id','assembled')}.mp4")
+                    final = stitch_videos(video_paths, output)
+                    if final:
+                        st.success("✅ Scene assembled")
+                        st.video(final)
+                        with open(final, "rb") as f:
+                            st.download_button(
+                                "⬇ Download Scene Video",
+                                data=f.read(),
+                                file_name=f"{scene.get('id','scene')}_assembled.mp4",
+                                mime="video/mp4",
+                            )
+                    else:
+                        st.error("❌ Assembly failed")
+
+    # ── Single Shot ───────────────────────────────────────────
+
+    with tab_single:
+        st.subheader("🎥 Single Shot Generation")
+
+        col1, col2 = st.columns(2)
+        with col1:
+            scene_options = {f"Scene {i+1}: {s.get('heading','Untitled')}": i for i, s in enumerate(scenes)}
+            selected_label = st.selectbox("Select Scene", list(scene_options.keys()), key="single_scene")
+            scene = scenes[scene_options[selected_label]]
+        with col2:
+            motion_options = agent.get_motion_options()
+            selected_motion = st.selectbox(
+                "Camera Motion", list(motion_options.keys()),
+                format_func=lambda x: f"{x.replace('_',' ').title()} — {motion_options[x]}",
+                key="single_motion",
+            )
+
+        col1, col2 = st.columns(2)
+        with col1:
+            style_options = agent.get_style_options()
+            selected_style = st.selectbox("Visual Style", list(style_options.keys()), key="single_style")
+        with col2:
+            duration = st.slider("Duration (seconds)", 2, 10, 5, step=1, key="single_dur")
+
+        director_style_single = st.selectbox("Director Style", list(_DIRECTOR_STYLES.keys()), key="single_dir_style")
+        shot_type_single = st.selectbox("Shot Type", ["wide", "push", "detail", "close"], key="single_shot_type")
+        shot_dummy = {"type": shot_type_single, "camera": _SHOT_CAMERAS[shot_type_single]}
+        prompt = build_cinematic_video_prompt(scene, shot_dummy, director_style_single)
+        st.text_area("Cinematic Prompt", prompt, height=180, disabled=True, key="single_prompt_preview")
+
+        concept_image = scene.get("concept_image")
+        concept_image_path = scene.get("concept_image_path")
+        if concept_image:
+            try:
+                if concept_image_path and Path(concept_image_path).exists():
+                    st.image(concept_image_path, width=400, caption="Reference image")
+                elif concept_image.startswith("data:"):
+                    import base64 as _b64
+                    img_bytes = _b64.b64decode(concept_image.split(",", 1)[1])
+                    st.image(img_bytes, width=400)
+                else:
+                    import requests as _req
+                    st.image(_req.get(concept_image, timeout=10).content, width=400)
+            except Exception:
+                st.info("Concept image ready")
+        else:
+            st.warning("⚠️ No concept image. Generate concept art first.")
+
+        if st.button("🎥 Generate Video", type="primary", use_container_width=True, key="single_gen"):
+            if not concept_image:
+                st.error("❌ Runway requires a reference image.")
+            else:
+                with st.spinner("⏳ Generating video…"):
+                    request = VideoGenRequest(
+                        scene_id=scene.get("id", "scene"),
+                        scene_heading=scene.get("heading", "Scene"),
+                        prompt_en=prompt,
+                        motion_type=selected_motion,
+                        style=selected_style,
+                        duration=duration,
+                        prompt_image=concept_image,
+                        notes=f"Generated for {project_title}",
+                    )
+                    result = agent.generate_video(request)
+                st.success(f"✅ {result.scene_id}")
+                col1, col2, col3 = st.columns(3)
+                col1.metric("Status", result.status)
+                col2.metric("Motion", selected_motion.replace("_", " ").title())
+                col3.metric("Duration", f"{result.duration}s")
+                if result.video_url:
+                    if Path(result.video_url).exists():
+                        st.video(result.video_url)
+                    else:
+                        st.info(f"📹 {result.video_url}")
+
+    # ── Batch ─────────────────────────────────────────────────
+
+    with tab_batch:
+        st.subheader("📹 Batch Generation")
+
+        col1, col2 = st.columns(2)
+        with col1:
+            motion_options = agent.get_motion_options()
+            selected_motions = st.multiselect(
+                "Motion types", list(motion_options.keys()),
+                default=list(motion_options.keys())[:3],
+                format_func=lambda x: x.replace("_", " ").title(),
+                key="batch_motions",
+            )
+        with col2:
+            style_options = agent.get_style_options()
+            selected_style = st.selectbox("Style", list(style_options.keys()), key="batch_style")
+
+        scene_selection = st.multiselect(
+            "Scenes",
+            [f"Scene {i+1}: {s.get('heading','Untitled')}" for i, s in enumerate(scenes)],
+            default=[f"Scene 1: {scenes[0].get('heading','Untitled')}"],
+            key="batch_scenes",
+        )
+        selected_indices = [int(s.split(":")[0].replace("Scene ", "")) - 1 for s in scene_selection]
+
+        if st.button("📹 Generate Batch", type="primary", use_container_width=True, key="batch_gen"):
+            if not selected_motions:
+                st.warning("Select at least one motion type")
+            else:
+                with st.spinner(f"⏳ Generating {len(selected_indices)} scenes…"):
+                    results = agent.generate_videos_for_scenes(
+                        [scenes[i] for i in selected_indices],
+                        motion_types=selected_motions,
+                        style=selected_style,
+                    )
+                st.success(f"✅ {len(results)} videos queued")
+                st.dataframe(
+                    [{"Scene": r.scene_id, "Status": r.status, "Duration": f"{r.duration}s"} for r in results],
+                    use_container_width=True,
+                )
+
+    # ── History ───────────────────────────────────────────────
+
+    st.markdown("---")
+    history = agent.get_generation_history()
+    if history:
+        st.subheader("📊 History")
+        st.dataframe(
+            [{"Scene": h["scene_id"], "Prompt": h["prompt_used"][:50] + "…",
+              "Motion": h.get("motion_applied") or "—", "Status": h["status"]} for h in history[-10:]],
+            use_container_width=True,
+        )
+
+    status = agent.get_status()
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Videos Generated", status["videos_generated"])
+    c2.metric("Motion Types", len(status["motion_options"]))
+    c3.metric("Style Presets", len(status["style_options"]))
