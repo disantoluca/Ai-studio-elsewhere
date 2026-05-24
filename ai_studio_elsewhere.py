@@ -1436,8 +1436,8 @@ with tab_home:
     # Current Projects
     st.markdown("### Your Projects")
     
-    if projects:
-        for proj_id in projects[:5]:
+    if _project_pairs:
+        for proj_id, proj_title in _project_pairs[:5]:
             proj = load_project(proj_id)
             if proj:
                 col1, col2, col3 = st.columns([3, 1, 1])
