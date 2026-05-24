@@ -599,7 +599,26 @@ def parse_script_to_scenes(text: str, translate: bool = False) -> List[SceneBrea
         try:
             scenes_data = json.loads(json_str)
         except:
-            # Fallback: create a simple scene breakdown
+            scenes_data = []
+
+        # GPT returned empty array or JSON failed — fall back to regex blocks
+        if not scenes_data and blocks:
+            scenes_data = [
+                {
+                    "scene_number": b["id"],
+                    "heading": b["heading"],
+                    "location": "",
+                    "time_of_day": "",
+                    "characters": [],
+                    "action": b["body"],
+                    "keywords": [],
+                    "mood": "",
+                    "_from_regex": True,
+                }
+                for b in blocks
+            ]
+        elif not scenes_data:
+            # No blocks either — single-scene fallback
             scenes_data = [
                 {
                     "scene_number": 1,
@@ -609,24 +628,9 @@ def parse_script_to_scenes(text: str, translate: bool = False) -> List[SceneBrea
                     "characters": [],
                     "action": text[:500],
                     "keywords": ["establishing"],
-                    "mood": "neutral"
+                    "mood": "neutral",
                 }
             ]
-            # Better fallback: if we have regex blocks, convert them directly
-            if blocks:
-                scenes_data = [
-                    {
-                        "scene_number": b["id"],
-                        "heading": b["heading"],
-                        "location": "",
-                        "time_of_day": "",
-                        "characters": [],
-                        "action": b["body"],
-                        "keywords": [],
-                        "mood": ""
-                    }
-                    for b in blocks
-                ]
         
         scenes = []
         
@@ -671,9 +675,7 @@ def parse_script_to_scenes(text: str, translate: bool = False) -> List[SceneBrea
             )
             scene.classification = classify_scene(scene)
             scenes.append(scene)
-        
-        st.success(f"✅ Extracted {len(scenes)} scenes")
-        
+
         return scenes
     
     except Exception as e:
