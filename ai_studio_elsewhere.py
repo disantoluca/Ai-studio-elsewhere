@@ -1006,51 +1006,115 @@ def generate_video_scene(scene: SceneBreakdown, concept_image_url: Optional[str]
 # Project Management
 # ===========================================
 
+# ===========================================
+# Persistent Storage (PostgreSQL → file fallback)
+# ===========================================
+
+DATABASE_URL = os.getenv("DATABASE_URL")
+
+
+def _get_db_conn():
+    if not DATABASE_URL:
+        return None
+    try:
+        import psycopg2
+        conn = psycopg2.connect(DATABASE_URL)
+        return conn
+    except Exception:
+        return None
+
+
+def _init_db():
+    conn = _get_db_conn()
+    if not conn:
+        return
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS projects (
+                project_id TEXT PRIMARY KEY,
+                title_en   TEXT,
+                data       TEXT NOT NULL,
+                updated_at TIMESTAMP DEFAULT NOW()
+            )
+        """)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+    finally:
+        conn.close()
+
+
+_init_db()
+
+
 def list_projects() -> List[str]:
-    """List all projects"""
-    projects = []
-    for proj_file in SCRIPTS_DIR.glob("project_*.json"):
-        projects.append(proj_file.stem.replace("project_", ""))
-    return sorted(projects)
+    """Return list of project_ids, most recently updated first."""
+    conn = _get_db_conn()
+    if conn:
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT project_id FROM projects ORDER BY updated_at DESC")
+            ids = [row[0] for row in cur.fetchall()]
+            conn.close()
+            return ids
+        except Exception:
+            conn.close()
+    # File fallback
+    ids = [p.stem.replace("project_", "") for p in SCRIPTS_DIR.glob("project_*.json")]
+    return sorted(ids)
+
+
+def list_projects_with_titles() -> List[tuple]:
+    """Return [(project_id, title_en), ...] most recently updated first."""
+    conn = _get_db_conn()
+    if conn:
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT project_id, title_en FROM projects ORDER BY updated_at DESC")
+            rows = cur.fetchall()
+            conn.close()
+            return [(r[0], r[1] or r[0]) for r in rows]
+        except Exception:
+            conn.close()
+    # File fallback
+    result = []
+    for p in SCRIPTS_DIR.glob("project_*.json"):
+        pid = p.stem.replace("project_", "")
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+            result.append((pid, data.get("title_en") or pid))
+        except Exception:
+            result.append((pid, pid))
+    return sorted(result, key=lambda x: x[1])
+
 
 def load_project(project_id: str) -> Optional[Project]:
-    """Load project from disk"""
-    proj_file = SCRIPTS_DIR / f"project_{project_id}.json"
-    if not proj_file.exists():
-        return None
-    
-    try:
-        with open(proj_file, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        
-        # Reconstruct Project object
+    """Load project — PostgreSQL first, file fallback."""
+
+    def _reconstruct(data: dict) -> Project:
         scenes = []
-        scenes_data = data.get("scenes", [])
-        if isinstance(scenes_data, list):
-            for s in scenes_data:
-                if isinstance(s, dict):
-                    scenes.append(SceneBreakdown(
-                        scene_id=s.get("scene_id", ""),
-                        scene_number=s.get("scene_number", 0),
-                        heading=s.get("heading", ""),
-                        location=s.get("location", ""),
-                        time_of_day=s.get("time_of_day", ""),
-                        characters=s.get("characters", []),
-                        action=s.get("action", ""),
-                        dialogue=s.get("dialogue", []),
-                        image_paths=s.get("image_paths", []),
-                        keywords=s.get("keywords", []),
-                        mood=s.get("mood", ""),
-                        classification=s.get("classification", ""),
-                        scene_type=s.get("scene_type", "STANDARD"),
-                    ))
-        
-        # Restore concepts
+        for s in (data.get("scenes") or []):
+            if isinstance(s, dict):
+                scenes.append(SceneBreakdown(
+                    scene_id=s.get("scene_id", ""),
+                    scene_number=s.get("scene_number", 0),
+                    heading=s.get("heading", ""),
+                    location=s.get("location", ""),
+                    time_of_day=s.get("time_of_day", ""),
+                    characters=s.get("characters", []),
+                    action=s.get("action", ""),
+                    dialogue=s.get("dialogue", []),
+                    image_paths=s.get("image_paths", []),
+                    keywords=s.get("keywords", []),
+                    mood=s.get("mood", ""),
+                    classification=s.get("classification", ""),
+                    scene_type=s.get("scene_type", "STANDARD"),
+                ))
         concepts = data.get("concepts", {})
         if not isinstance(concepts, dict):
             concepts = {}
-        
-        project = Project(
+        return Project(
             project_id=data.get("project_id"),
             title_en=data.get("title_en"),
             title_zh=data.get("title_zh"),
@@ -1062,15 +1126,31 @@ def load_project(project_id: str) -> Optional[Project]:
             scenes=scenes,
             concepts=concepts,
         )
-        return project
+
+    conn = _get_db_conn()
+    if conn:
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT data FROM projects WHERE project_id = %s", (project_id,))
+            row = cur.fetchone()
+            conn.close()
+            if row:
+                return _reconstruct(json.loads(row[0]))
+        except Exception:
+            conn.close()
+
+    # File fallback
+    proj_file = SCRIPTS_DIR / f"project_{project_id}.json"
+    if not proj_file.exists():
+        return None
+    try:
+        return _reconstruct(json.loads(proj_file.read_text(encoding="utf-8")))
     except Exception as e:
         st.error(f"❌ Failed to load project: {e}")
         return None
 
 def save_project(project: Project):
-    """Save project to disk"""
-    proj_file = SCRIPTS_DIR / f"project_{project.project_id}.json"
-    
+    """Save project — PostgreSQL first, file fallback."""
     data = {
         "project_id": project.project_id,
         "title_en": project.title_en,
@@ -1101,8 +1181,29 @@ def save_project(project: Project):
         "concepts": project.concepts,
         "videos": list(project.videos.keys()),
     }
-    
+    json_str = json.dumps(data, ensure_ascii=False)
+
+    conn = _get_db_conn()
+    if conn:
+        try:
+            cur = conn.cursor()
+            cur.execute("""
+                INSERT INTO projects (project_id, title_en, data)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (project_id)
+                DO UPDATE SET title_en = %s, data = %s, updated_at = NOW()
+            """, (project.project_id, project.title_en, json_str,
+                  project.title_en, json_str))
+            conn.commit()
+            conn.close()
+            return
+        except Exception:
+            conn.rollback()
+            conn.close()
+
+    # File fallback
     try:
+        proj_file = SCRIPTS_DIR / f"project_{project.project_id}.json"
         with open(proj_file, 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
     except Exception as e:
@@ -1151,13 +1252,16 @@ st.sidebar.header("🎬 Film Projects")
 if st.sidebar.button("🔄 Refresh Projects"):
     st.rerun()
 
-projects = list_projects()
-if projects:
-    active = st.session_state.get('active_project', projects[0])
-    default_idx = projects.index(active) if active in projects else 0
-    selected_project = st.sidebar.selectbox("Select a project", projects, index=default_idx)
+_project_pairs = list_projects_with_titles()  # [(id, title), ...]
+if _project_pairs:
+    _project_ids    = [p[0] for p in _project_pairs]
+    _project_labels = [p[1] for p in _project_pairs]
+    active = st.session_state.get('active_project', _project_ids[0])
+    default_idx = _project_ids.index(active) if active in _project_ids else 0
+    _selected_label = st.sidebar.selectbox("Select a project", _project_labels, index=default_idx)
+    selected_project = _project_ids[_project_labels.index(_selected_label)]
     st.session_state['active_project'] = selected_project
-    st.sidebar.success(f"✅ {len(projects)} project(s) found")
+    st.sidebar.success(f"✅ {len(_project_pairs)} project(s) found")
 else:
     selected_project = None
     st.sidebar.warning("No projects yet. Create one in the 'New Project' tab.")
