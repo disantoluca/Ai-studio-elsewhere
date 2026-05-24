@@ -191,12 +191,18 @@ if "user_id" not in st.session_state:
     st.session_state.is_admin = True
 
 # OpenAI for translation & text processing
+_openai_init_error = None
 try:
-    from openai import OpenAI
-    openai_client = OpenAI()
+    from openai import OpenAI as _OpenAI
+    _openai_api_key = os.getenv("OPENAI_API_KEY")
+    if _openai_api_key:
+        openai_client = _OpenAI(api_key=_openai_api_key)
+    else:
+        openai_client = None
+        _openai_init_error = "OPENAI_API_KEY not found in environment"
 except Exception as e:
-    print(f"⚠️ OpenAI client init failed: {e}")
     openai_client = None
+    _openai_init_error = str(e)
 
 # Runway Characters (Latest GWM-1)
 try:
@@ -1672,7 +1678,7 @@ with tab_scenes:
                         # AI rewrite
                         with st.expander("Rewrite with AI", expanded=False):
                             if not openai_client:
-                                st.info("Add OPENAI_API_KEY to Railway environment variables to enable AI rewrite.")
+                                st.warning(f"OpenAI unavailable: {_openai_init_error or 'unknown error'}")
                             else:
                                 style_choice = st.selectbox(
                                     "Style",
