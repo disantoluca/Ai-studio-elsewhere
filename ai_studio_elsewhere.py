@@ -545,22 +545,42 @@ def parse_script_to_scenes(text: str, translate: bool = False) -> List[SceneBrea
     Parse script text to individual scenes with optional translation.
     Uses regex for structure, GPT-4o-mini for enrichment.
     """
+    # Always extract regex blocks first — they are the floor for all failure paths
+    blocks = extract_scene_blocks(text)
+
+    def _blocks_to_scenes(blocks_list):
+        scenes = []
+        for i, b in enumerate(blocks_list):
+            scene = SceneBreakdown(
+                scene_id=f"scene_{i+1:03d}",
+                scene_number=b["id"],
+                heading=b["heading"],
+                location="",
+                time_of_day="",
+                characters=[],
+                action=b["body"],
+                dialogue=[],
+                keywords=[],
+                mood="",
+                scene_type=b.get("type", "STANDARD"),
+            )
+            scene.classification = classify_scene(scene)
+            scenes.append(scene)
+        return scenes
+
     if not openai_client:
-        return []
+        return _blocks_to_scenes(blocks) if blocks else []
 
     try:
-        # Pre-extract scene blocks via regex — gives GPT clean structured input
-        # and avoids the [:2000] truncation bug
-        blocks = extract_scene_blocks(text)
+        # Build condensed input for GPT from already-extracted blocks
         if blocks:
-            # Build a condensed scene summary for GPT (much richer than raw [:2000])
             condensed = "\n\n".join(
                 f"SCENE {b['id']}: {b['heading']}\n{b['body'][:300]}"
-                for b in blocks[:20]  # cap at 20 scenes to stay within token budget
+                for b in blocks[:20]
             )
             gpt_input = condensed
         else:
-            # No INT./EXT. found — send raw text (covers prose scripts, treatments)
+            # No INT./EXT. found — send raw text (prose scripts, treatments)
             gpt_input = text[:8000]
 
         response = openai_client.chat.completions.create(
@@ -679,8 +699,8 @@ def parse_script_to_scenes(text: str, translate: bool = False) -> List[SceneBrea
         return scenes
     
     except Exception as e:
-        st.error(f"❌ Scene parsing failed: {e}")
-        return []
+        st.warning(f"⚠️ GPT enrichment failed ({e}) — using regex structure")
+        return _blocks_to_scenes(blocks) if blocks else []
 
 # ===========================================
 # Scene Prompt Auto-Builder
