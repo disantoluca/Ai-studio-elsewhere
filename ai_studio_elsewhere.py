@@ -271,13 +271,14 @@ except ImportError:
 # ===========================================
 
 BASE_DIR = Path(__file__).parent
-DATA_DIR = BASE_DIR / "data"
-SCRIPTS_DIR = DATA_DIR / "scripts"
-SCENES_DIR = DATA_DIR / "scenes"
-CONCEPTS_DIR = DATA_DIR / "concepts"
-VIDEOS_DIR = DATA_DIR / "videos"
+# DATA_DIR can be overridden via env var so Railway Volumes survive redeploys
+DATA_DIR = Path(os.getenv("DATA_DIR", str(BASE_DIR / "data")))
+SCRIPTS_DIR   = DATA_DIR / "scripts"
+SCENES_DIR    = DATA_DIR / "scenes"
+CONCEPTS_DIR  = DATA_DIR / "concepts"
+VIDEOS_DIR    = DATA_DIR / "videos"
 STORYBOARDS_DIR = DATA_DIR / "storyboards"
-EXPORTS_DIR = DATA_DIR / "exports"
+EXPORTS_DIR   = DATA_DIR / "exports"
 
 for d in [DATA_DIR, SCRIPTS_DIR, SCENES_DIR, CONCEPTS_DIR, VIDEOS_DIR, STORYBOARDS_DIR, EXPORTS_DIR]:
     d.mkdir(parents=True, exist_ok=True)
