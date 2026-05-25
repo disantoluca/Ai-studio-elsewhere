@@ -984,31 +984,22 @@ def generate_concept_images(scene: SceneBreakdown, style: str = "cinematic", pro
         ).strip()
 
         if openai_client:
-            # Try gpt-image-1 first (latest), fall back to dall-e-2 (widely available)
-            _image_models = [
-                ("gpt-image-1", {"size": "1024x1024"}),
-                ("dall-e-2",    {"size": "1024x1024"}),
-            ]
-            generated_url = None
-            _model_errors = []
-            for _model, _params in _image_models:
-                try:
-                    print(f"[AI Studio] Trying {_model} ...")
-                    response = openai_client.images.generate(
-                        model=_model, prompt=prompt, n=1, **_params,
-                    )
-                    generated_url = response.data[0].url
-                    print(f"[AI Studio] ✅ Image generated via {_model}")
-                    break
-                except Exception as e:
-                    _model_errors.append(f"**{_model}**: {e}")
-                    print(f"[AI Studio] ❌ {_model} failed: {e}")
-            if generated_url:
-                img_bytes = requests.get(generated_url, timeout=30).content
-                local_path.write_bytes(img_bytes)
+            # gpt-image-1 returns b64_json (not a URL) — decode directly
+            try:
+                import base64 as _b64
+                print(f"[AI Studio] Calling gpt-image-1 ...")
+                _resp = openai_client.images.generate(
+                    model="gpt-image-1", prompt=prompt, n=1, size="1024x1024",
+                )
+                _img_bytes = _b64.b64decode(_resp.data[0].b64_json)
+                local_path.parent.mkdir(parents=True, exist_ok=True)
+                local_path.write_bytes(_img_bytes)
+                print(f"[AI Studio] ✅ gpt-image-1 saved to {local_path}")
                 return [str(local_path)]
-            st.error("❌ All OpenAI image models failed:\n\n" + "\n\n".join(_model_errors))
-            return []
+            except Exception as _e:
+                print(f"[AI Studio] ❌ gpt-image-1 failed: {_e}")
+                st.error(f"❌ gpt-image-1 failed: {_e}")
+                return []
         else:
             st.error(f"❌ OpenAI client not available: {_openai_init_error or 'OPENAI_API_KEY not set'}")
             return []
@@ -1946,26 +1937,18 @@ with tab_concepts:
             if openai_client:
                 with st.spinner("Calling gpt-image-1 ..."):
                     try:
+                        import base64 as _b64t
                         _test_resp = openai_client.images.generate(
                             model="gpt-image-1",
                             prompt="cinematic film still, coastal village at dusk, 35mm photography",
                             n=1,
                             size="1024x1024",
                         )
-                        st.image(_test_resp.data[0].url)
+                        _test_bytes = _b64t.b64decode(_test_resp.data[0].b64_json)
+                        st.image(_test_bytes)
                         st.success("✅ gpt-image-1 works!")
                     except Exception as _test_e:
                         st.error(f"❌ gpt-image-1 error: {_test_e}")
-                        try:
-                            _test_resp2 = openai_client.images.generate(
-                                model="dall-e-2",
-                                prompt="cinematic film still, coastal village at dusk",
-                                n=1, size="1024x1024",
-                            )
-                            st.image(_test_resp2.data[0].url)
-                            st.success("✅ dall-e-2 works (gpt-image-1 blocked on this account)")
-                        except Exception as _test_e2:
-                            st.error(f"❌ dall-e-2 also failed: {_test_e2}")
             else:
                 st.error("OpenAI client not initialized")
     
