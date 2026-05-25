@@ -11,3 +11,4 @@ dashscope>=1.14.0
 runwayml
 pymupdf>=1.23.0
 psycopg2-binary>=2.9.0
+imageio-ffmpeg>=0.4.9

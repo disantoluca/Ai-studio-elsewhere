@@ -17,6 +17,18 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# Resolve ffmpeg binary — imageio-ffmpeg ships its own, bypassing Nix PATH issues
+def _get_ffmpeg_bin() -> Optional[str]:
+    try:
+        import imageio_ffmpeg
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:
+        pass
+    import shutil
+    return shutil.which("ffmpeg")
+
+_FFMPEG_BIN = _get_ffmpeg_bin()
+
 try:
     from runway_video_agent import (
         RunwayVideoAgent, VideoGenRequest, VideoGenResult,
@@ -135,7 +147,7 @@ COLOR_GRADES = {
 
 def _ffmpeg_available() -> bool:
     try:
-        subprocess.run(["ffmpeg", "-version"], capture_output=True, timeout=5)
+        subprocess.run([_FFMPEG_BIN, "-version"], capture_output=True, timeout=5)
         return True
     except Exception:
         return False
@@ -154,7 +166,7 @@ def stitch_videos(video_paths: List[str], output_path: str) -> Optional[str]:
         concat_file = f.name
     try:
         result = subprocess.run(
-            ["ffmpeg", "-y", "-f", "concat", "-safe", "0",
+            [_FFMPEG_BIN, "-y", "-f", "concat", "-safe", "0",
              "-i", concat_file, "-c", "copy", output_path],
             capture_output=True, timeout=120
         )
@@ -170,7 +182,7 @@ def apply_color_grade(video_path: str, grade_filter: str, output_path: str) -> O
         return None
     try:
         result = subprocess.run(
-            ["ffmpeg", "-y", "-i", video_path,
+            [_FFMPEG_BIN, "-y", "-i", video_path,
              "-vf", grade_filter, "-c:a", "copy", output_path],
             capture_output=True, timeout=120
         )
