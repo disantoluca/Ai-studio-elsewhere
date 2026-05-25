@@ -1007,10 +1007,15 @@ def generate_concept_images(scene: SceneBreakdown, style: str = "cinematic", pro
                 _left = (_rw - _target_w) // 2
                 _top  = (_rh - _target_h) // 2
                 _img_final = _resized.crop((_left, _top, _left + _target_w, _top + _target_h))
+                # Save to file for local display
                 local_path.parent.mkdir(parents=True, exist_ok=True)
                 _img_final.save(str(local_path), "PNG")
-                print(f"[AI Studio] ✅ gpt-image-1 1280×720 saved to {local_path}")
-                return [str(local_path)]
+                # Also return as data URI so it survives Railway deploys in DB
+                _buf = _BytesIO()
+                _img_final.save(_buf, "PNG")
+                _data_uri = "data:image/png;base64," + _b64.b64encode(_buf.getvalue()).decode()
+                print(f"[AI Studio] ✅ gpt-image-1 1280×720 saved ({len(_data_uri)//1024}KB)")
+                return [_data_uri]
             except Exception as _e:
                 print(f"[AI Studio] ❌ gpt-image-1 failed: {_e}")
                 st.error(f"❌ gpt-image-1 failed: {_e}")
@@ -2051,26 +2056,46 @@ with tab_concepts:
                     help="Generate the same scene with Concept Art AND Cinematic Realism side by side")
 
             # ── Helpers ───────────────────────────────────────────────
-            def _render_concept_card(img_path: str, scene, key_suffix: str):
+            def _img_bytes_from(img_ref: str) -> Optional[bytes]:
+                """Return raw bytes from a data URI or local file path."""
+                import base64 as _b64c
+                if img_ref.startswith("data:image/"):
+                    _, b64data = img_ref.split(",", 1)
+                    return _b64c.b64decode(b64data)
+                p = Path(img_ref)
+                return p.read_bytes() if p.exists() else None
+
+            def _render_concept_card(img_ref: str, scene, key_suffix: str):
+                raw = _img_bytes_from(img_ref)
                 try:
-                    st.image(img_path, use_container_width=True)
+                    st.image(raw if raw else img_ref, use_container_width=True)
                 except Exception:
-                    st.write(f"[Image]({img_path})")
-                p = Path(img_path)
+                    st.write("[Image unavailable]")
                 a1, a2, a3 = st.columns(3)
                 with a1:
-                    if p.exists():
-                        st.download_button("⬇ Save", data=p.read_bytes(),
-                            file_name=p.name, mime="image/png", key=f"dl_{key_suffix}")
+                    if raw:
+                        st.download_button("⬇ Save", data=raw,
+                            file_name=f"frame_{key_suffix}.png", mime="image/png",
+                            key=f"dl_{key_suffix}")
                 with a2:
                     if st.button("🎬 Use as Video Base", key=f"vb_{key_suffix}"):
                         st.session_state["video_base_scene_id"] = scene.scene_id
-                        st.session_state["video_base_image_path"] = img_path
+                        st.session_state["video_base_image_path"] = img_ref
                         st.success("✅ Set as video base — go to Video Generation tab")
                 with a3:
                     if st.button("↺ Regenerate", key=f"regen_{key_suffix}"):
-                        st.session_state[f"regen_{scene.scene_id}"] = True
-                        st.rerun()
+                        with st.spinner("Regenerating..."):
+                            new_imgs = generate_concept_images(
+                                scene, visual_direction.lower(),
+                                project_id=project.project_id,
+                                mode=image_gen_mode,
+                                output_type=output_type,
+                                video_ready=video_ready,
+                            )
+                        if new_imgs:
+                            project.concepts[scene.scene_id] = new_imgs
+                            save_project(project)
+                            st.rerun()
 
             # ── Generate ──────────────────────────────────────────────
             if (do_generate or do_compare) and not selected_scenes:
@@ -2194,14 +2219,18 @@ with tab_video:
                 path = paths[0]
                 if not path:
                     return None
+                # Already a data URI (new storage format)
+                if path.startswith("data:image/"):
+                    return path
+                # https:// URL — pass directly
                 if path.startswith("https://"):
                     return path
+                # Legacy local file path — encode if still exists
                 p = Path(path)
                 if p.exists():
                     import base64
-                    data = base64.b64encode(p.read_bytes()).decode()
-                    return f"data:image/png;base64,{data}"
-                return None  # file missing — caller does text-to-video
+                    return "data:image/png;base64," + base64.b64encode(p.read_bytes()).decode()
+                return None
 
             scenes_for_video = [
                 {
