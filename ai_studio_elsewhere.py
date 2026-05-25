@@ -2187,17 +2187,21 @@ with tab_video:
         else:
             # Convert scenes to format for video generation
             def _concept_for_runway(scene_id: str) -> Optional[str]:
-                """Return concept image as local path (display) or base64 data URI (Runway API)."""
+                """Return data:image/... URI for Runway API, or None if unavailable."""
                 paths = project.concepts.get(scene_id, [])
                 if not paths:
                     return None
                 path = paths[0]
+                if not path:
+                    return None
+                if path.startswith("https://"):
+                    return path
                 p = Path(path)
                 if p.exists():
                     import base64
                     data = base64.b64encode(p.read_bytes()).decode()
                     return f"data:image/png;base64,{data}"
-                return path  # fall back to URL if local file missing
+                return None  # file missing — caller does text-to-video
 
             scenes_for_video = [
                 {
