@@ -972,7 +972,6 @@ def generate_concept_images(scene: SceneBreakdown, style: str = "cinematic", pro
                     prompt=prompt,
                     size="1792x1024",
                     quality="hd",
-                    style="natural",
                     n=1,
                 )
                 url = response.data[0].url
@@ -993,7 +992,7 @@ def generate_concept_images(scene: SceneBreakdown, style: str = "cinematic", pro
             if result:
                 return [result]
 
-        st.error("❌ Cinematic mode needs OpenAI or Byteplus API key configured.")
+        st.error("❌ Cinematic generation failed — check OpenAI key or Byteplus activation.")
         return []
 
     # ── Concept Art mode (Wanxiang) ─────────────────────────────
