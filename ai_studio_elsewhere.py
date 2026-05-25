@@ -966,20 +966,30 @@ def generate_concept_images(scene: SceneBreakdown, style: str = "cinematic", pro
                 f"film grain, shallow depth of field, imperfect realistic lighting. "
                 f"Shot on ARRI Alexa, anamorphic lens. No CGI, no illustration, no painting."
             )
+        # Try image models in order of quality
+        _image_models = [
+            ("gpt-image-1", {"size": "1536x1024", "quality": "high"}),
+            ("dall-e-3",    {"size": "1792x1024", "quality": "hd"}),
+            ("dall-e-2",    {"size": "1024x1024"}),
+        ]
+        generated_url = None
+        for _model, _params in _image_models:
             try:
                 response = openai_client.images.generate(
-                    model="dall-e-3",
+                    model=_model,
                     prompt=prompt,
-                    size="1792x1024",
-                    quality="hd",
                     n=1,
+                    **_params,
                 )
-                url = response.data[0].url
-                img_bytes = requests.get(url, timeout=30).content
-                local_path.write_bytes(img_bytes)
-                return [str(local_path)]
+                generated_url = response.data[0].url
+                break
             except Exception as e:
-                st.warning(f"⚠️ DALL-E 3 failed: {e}")
+                st.warning(f"⚠️ {_model} failed: {e}")
+
+        if generated_url:
+            img_bytes = requests.get(generated_url, timeout=30).content
+            local_path.write_bytes(img_bytes)
+            return [str(local_path)]
 
         # Byteplus fallback
         if JIMENG_AVAILABLE:
