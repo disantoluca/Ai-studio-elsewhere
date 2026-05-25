@@ -17,6 +17,15 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+
+def _safe_path_exists(p: str) -> bool:
+    """Path.exists() that never raises — guards against data URIs / long strings."""
+    try:
+        return Path(p).exists()
+    except OSError:
+        return False
+
+
 # Resolve ffmpeg binary — imageio-ffmpeg ships its own, bypassing Nix PATH issues
 def _get_ffmpeg_bin() -> Optional[str]:
     try:
@@ -156,8 +165,9 @@ def _ffmpeg_available() -> bool:
 def _download_clip(url: str, scene_id: str, shot_type: str) -> Optional[str]:
     """Download a Runway streaming URL to a local temp file. Returns local path or None."""
     try:
-        import requests as _req
-        dest = Path(tempfile.gettempdir()) / f"clip_{scene_id}_{shot_type}.mp4"
+        import uuid, requests as _req
+        safe_id = str(scene_id)[:12].replace(" ", "_").replace("/", "_")
+        dest = Path(tempfile.gettempdir()) / f"clip_{safe_id}_{shot_type}_{uuid.uuid4().hex[:6]}.mp4"
         resp = _req.get(url, timeout=120, stream=True)
         resp.raise_for_status()
         with open(dest, "wb") as f:
@@ -173,7 +183,7 @@ def stitch_videos(video_paths: List[str], output_path: str) -> Optional[str]:
     """Concatenate video files with ffmpeg. Returns output path or None."""
     if not _ffmpeg_available():
         return None
-    valid = [p for p in video_paths if Path(p).exists()]
+    valid = [p for p in video_paths if _safe_path_exists(p)]
     if not valid:
         return None
     with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
@@ -187,14 +197,14 @@ def stitch_videos(video_paths: List[str], output_path: str) -> Optional[str]:
             capture_output=True, timeout=120
         )
         os.unlink(concat_file)
-        return output_path if Path(output_path).exists() else None
+        return output_path if _safe_path_exists(output_path) else None
     except Exception:
         return None
 
 
 def apply_color_grade(video_path: str, grade_filter: str, output_path: str) -> Optional[str]:
     """Apply ffmpeg color grade filter. Returns output path or None."""
-    if not _ffmpeg_available() or not Path(video_path).exists():
+    if not _ffmpeg_available() or not _safe_path_exists(video_path):
         return None
     try:
         result = subprocess.run(
@@ -202,7 +212,7 @@ def apply_color_grade(video_path: str, grade_filter: str, output_path: str) -> O
              "-vf", grade_filter, "-c:a", "copy", output_path],
             capture_output=True, timeout=120
         )
-        return output_path if Path(output_path).exists() else None
+        return output_path if _safe_path_exists(output_path) else None
     except Exception:
         return None
 
@@ -227,6 +237,13 @@ def _timeline_bar(shots: List[Dict], generated: Dict) -> str:
 
 def display_video_generation_tab(scenes: List[Dict], project_title: str):
     """Main video generation interface — Director Mode first."""
+    import traceback as _tb2
+
+    # Sanitize: remove any data URI from fields other than concept_image
+    for _s in scenes:
+        for _k, _v in list(_s.items()):
+            if _k != "concept_image" and isinstance(_v, str) and len(_v) > 260:
+                _s[_k] = None
 
     if not RUNWAY_AVAILABLE:
         st.error("❌ Runway Video Agent not loaded — check runway_video_agent.py")
@@ -264,8 +281,15 @@ def display_video_generation_tab(scenes: List[Dict], project_title: str):
             director_style = st.selectbox("Director Style", list(_DIRECTOR_STYLES.keys()), key="dir_style")
 
         concept_path = scene.get("concept_image_path")
-        if concept_path and Path(concept_path).exists():
-            st.image(concept_path, width=600, caption="Reference frame")
+        if concept_path:
+            try:
+                if concept_path.startswith("data:image/"):
+                    import base64 as _b64disp
+                    st.image(_b64disp.b64decode(concept_path.split(",", 1)[1]), width=600, caption="Reference frame")
+                elif _safe_path_exists(concept_path):
+                    st.image(concept_path, width=600, caption="Reference frame")
+            except Exception:
+                pass
 
         shots = generate_shot_sequence(scene)
 
@@ -304,6 +328,10 @@ def display_video_generation_tab(scenes: List[Dict], project_title: str):
         if clips_key not in st.session_state:
             st.session_state[clips_key] = {}
         generated = st.session_state[clips_key]
+        # Drop any stale data-URI entries from session state
+        generated = {k: v for k, v in generated.items()
+                     if isinstance(v, str) and not v.startswith("data:") and len(v) <= 260}
+        st.session_state[clips_key] = generated
 
         st.markdown("#### Timeline")
         st.markdown(f"`{_timeline_bar(shots, generated)}`")
@@ -320,6 +348,8 @@ def display_video_generation_tab(scenes: List[Dict], project_title: str):
                     for idx, shot in enumerate(shots):
                         progress.progress(idx / len(shots), text=f"Generating {shot['label']} shot...")
                         prompt = build_cinematic_video_prompt(scene, shot, director_style)
+                        if isinstance(concept_image, str) and concept_image.startswith("data:image"):
+                            raise ValueError(f"🚨 DATA URI passed as prompt_image (len={len(concept_image)})")
                         request = VideoGenRequest(
                             scene_id=f"{scene.get('id','scene')}_{shot['type']}",
                             scene_heading=f"{scene.get('heading','')} — {shot['label']}",
@@ -361,7 +391,7 @@ def display_video_generation_tab(scenes: List[Dict], project_title: str):
                 ref = generated[stype]
                 with clip_cols[i % 4]:
                     st.caption(shot["label"])
-                    if Path(ref).exists():
+                    if _safe_path_exists(ref):
                         st.video(ref)
                         video_paths.append(ref)
                     else:
@@ -449,7 +479,7 @@ def display_video_generation_tab(scenes: List[Dict], project_title: str):
         concept_image_path = scene.get("concept_image_path")
         if concept_image:
             try:
-                if concept_image_path and Path(concept_image_path).exists():
+                if concept_image_path and not concept_image_path.startswith("data:") and _safe_path_exists(concept_image_path):
                     st.image(concept_image_path, width=400, caption="Reference image")
                 elif concept_image.startswith("data:"):
                     import base64 as _b64
@@ -491,7 +521,7 @@ def display_video_generation_tab(scenes: List[Dict], project_title: str):
                     if result.video_url:
                         local = _download_clip(result.video_url, scene.get("id","scene"), "single")
                         display_path = local or result.video_url
-                        if local and Path(local).exists():
+                        if local and _safe_path_exists(local):
                             st.video(local)
                         else:
                             st.markdown(f"[📥 Download video]({result.video_url})")

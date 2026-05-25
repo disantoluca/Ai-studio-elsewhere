@@ -1322,6 +1322,8 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+st.warning("🔥 BUILD v2025-05-25b — if you see this, new code is live")
+
 st.markdown("""
 <style>
 .stApp {
@@ -2238,16 +2240,22 @@ with tab_video:
                     "heading": scene.heading,
                     "prompt": f"{scene.heading}. Location: {scene.location}. Time: {scene.time_of_day}. Mood: {scene.mood}. Action: {scene.action[:100]}",
                     "concept_image": _concept_for_runway(scene.scene_id),
-                    "concept_image_path": (project.concepts.get(scene.scene_id) or [None])[0],
+                    # concept_image_path is only used for local file display; data URIs go via concept_image
+                    "concept_image_path": None,
                 }
                 for scene in project.scenes
             ]
             
             try:
+                import importlib, sys as _sys
+                if 'runway_video_ui' in _sys.modules:
+                    importlib.reload(_sys.modules['runway_video_ui'])
                 from runway_video_ui import display_video_generation_tab
                 display_video_generation_tab(scenes_for_video, project.title_en)
             except Exception as _video_err:
+                import traceback as _tb
                 st.error(f"⚠️ Video module error: {_video_err}")
+                st.code(_tb.format_exc(), language="text")
                 st.markdown("---")
                 
                 # Demo fallback: let directors preview workflow without API
