@@ -313,6 +313,24 @@ def _detect_sound_profile(scene: Dict) -> str:
         return "Thai"
     return "Global"
 
+
+# ── Cinematic style presets (Photo → Clip) ───────────────────
+
+_CINEMATIC_STYLE_MAP = {
+    "Natural Realism": "photorealistic, natural light, subtle motion, environmental breath",
+    "Noir":            "black and white, high contrast, deep shadows, moody atmosphere",
+    "Dreamlike":       "soft ethereal light, gentle diffusion, floating atmosphere, pastel depth",
+    "Gritty":          "film grain, harsh directional light, raw texture, documentary realism",
+}
+
+def _enhance_photo_prompt(style: str) -> str:
+    style_layer = _CINEMATIC_STYLE_MAP.get(style, "")
+    return (
+        f"Cinematic film. Slow push-in camera movement. "
+        f"Shallow depth of field. Subtle environmental motion. "
+        f"Realistic lighting shift. Depth and atmosphere. {style_layer}."
+    )
+
 def _timeline_bar(shots: List[Dict], generated: Dict) -> str:
     """ASCII timeline bar — filled if clip exists, empty if not."""
     bar = ""
@@ -357,7 +375,7 @@ def display_video_generation_tab(scenes: List[Dict], project_title: str):
         "🎬 Director Mode",
         "🎥 Single Shot",
         "📹 Batch",
-        "📸 Photo → Clip",
+        "✨ Bring Image to Life",
     ])
 
     # ── Director Mode ─────────────────────────────────────────
@@ -763,22 +781,23 @@ def display_video_generation_tab(scenes: List[Dict], project_title: str):
                     use_container_width=True,
                 )
 
-    # ── Photo → Clip ──────────────────────────────────────────
+    # ── Bring Image to Life ───────────────────────────────────
 
     with tab_photo:
-        st.subheader("📸 Photo → Cinematic Clip")
-        st.caption("Upload any photo — center-cropped to 1280×720, film effects applied, then Runway generates a 5-second cinematic clip.")
+        st.subheader("✨ Bring Image to Life")
+        st.caption("Upload any photograph or still frame — the system applies cinematic motion.")
 
         uploaded = st.file_uploader(
-            "Upload reference photo",
+            "Upload image",
             type=["png", "jpg", "jpeg", "webp"],
             key="photo_uploader",
+            label_visibility="collapsed",
         )
 
         if uploaded:
             source_id = f"{uploaded.name}_{uploaded.size}"
             if st.session_state.get("photo_clip_source_id") != source_id:
-                with st.spinner("Processing image — applying film effects..."):
+                with st.spinner("Preparing frame..."):
                     uri = _process_uploaded_photo(uploaded.getvalue())
                 if uri:
                     st.session_state["photo_clip_source_id"] = source_id
@@ -792,42 +811,39 @@ def display_video_generation_tab(scenes: List[Dict], project_title: str):
         if clip_uri:
             import base64 as _b64ph
             img_bytes = _b64ph.b64decode(clip_uri.split(",", 1)[1])
-            st.image(img_bytes, caption="Processed — 1280×720 · subtle film grade", use_container_width=True)
+            st.image(img_bytes, use_container_width=True)
 
-            _ph1, _ph2 = st.columns([3, 1])
-            with _ph1:
-                photo_prompt = st.text_area(
-                    "Cinematic prompt",
-                    value=(
-                        "Cinematic film. Slow dolly forward. Shallow depth of field. "
-                        "Film grain. Natural light. Atmospheric movement. "
-                        "Professional cinematography."
-                    ),
-                    height=100,
-                    key="photo_prompt",
+            _ps1, _ps2 = st.columns([2, 1])
+            with _ps1:
+                photo_style = st.selectbox(
+                    "Visual style",
+                    list(_CINEMATIC_STYLE_MAP.keys()),
+                    key="photo_style",
                 )
-            with _ph2:
-                photo_style = st.selectbox("Style", list(_DIRECTOR_STYLES.keys()), key="photo_style")
-                photo_dur   = st.slider("Duration (s)", 2, 10, 5, key="photo_dur")
+            with _ps2:
+                photo_dur = st.slider("Duration (s)", 2, 10, 5, key="photo_dur")
 
-            if st.button("🎬 Generate Clip from Photo", type="primary", use_container_width=True, key="photo_gen"):
-                with st.spinner("⏳ Generating cinematic clip via Runway..."):
+            _auto_prompt = _enhance_photo_prompt(photo_style)
+            with st.expander("Advanced — view cinematic prompt"):
+                st.code(_auto_prompt, language=None)
+
+            if st.button("✨ Bring Image to Life", type="primary", use_container_width=True, key="photo_gen"):
+                with st.spinner("Creating cinematic motion..."):
                     import uuid as _uuid_ph
                     req = VideoGenRequest(
                         scene_id=f"photo_{_uuid_ph.uuid4().hex[:6]}",
-                        scene_heading="Photo → Clip",
-                        prompt_en=photo_prompt,
+                        scene_heading="Bring Image to Life",
+                        prompt_en=_auto_prompt,
                         motion_type=None,
-                        style=photo_style.lower(),
+                        style=photo_style.lower().replace(" ", "_"),
                         duration=photo_dur,
                         prompt_image=clip_uri,
-                        notes=f"Photo upload — {project_title}",
+                        notes=f"Bring Image to Life — {project_title}",
                     )
                     result = agent.generate_video(req)
                 if result.video_url:
                     local = _download_clip(result.video_url, "photo", "clip")
                     st.session_state["photo_clip_result"] = local or result.video_url
-                    st.success("✅ Clip generated")
                     st.rerun()
                 else:
                     err = (result.metadata or {}).get("error", "generation failed")
@@ -835,14 +851,13 @@ def display_video_generation_tab(scenes: List[Dict], project_title: str):
 
             result_path = st.session_state.get("photo_clip_result")
             if result_path:
-                st.markdown("#### Generated Clip")
                 if _safe_path_exists(result_path):
                     st.video(result_path)
                     with open(result_path, "rb") as _f:
                         st.download_button(
-                            "⬇ Download Clip",
+                            "⬇ Download",
                             data=_f.read(),
-                            file_name="photo_clip.mp4",
+                            file_name="cinematic_clip.mp4",
                             mime="video/mp4",
                             key="photo_dl",
                         )
@@ -850,7 +865,7 @@ def display_video_generation_tab(scenes: List[Dict], project_title: str):
                     st.markdown(f"[📥 Download clip]({result_path})")
 
         elif not uploaded:
-            st.info("Upload a photo above to begin.")
+            st.info("Upload a photograph above to begin.")
 
     # ── History ───────────────────────────────────────────────
 
