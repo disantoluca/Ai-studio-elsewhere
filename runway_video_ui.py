@@ -153,6 +153,22 @@ def _ffmpeg_available() -> bool:
         return False
 
 
+def _download_clip(url: str, scene_id: str, shot_type: str) -> Optional[str]:
+    """Download a Runway streaming URL to a local temp file. Returns local path or None."""
+    try:
+        import requests as _req
+        dest = Path(tempfile.gettempdir()) / f"clip_{scene_id}_{shot_type}.mp4"
+        resp = _req.get(url, timeout=120, stream=True)
+        resp.raise_for_status()
+        with open(dest, "wb") as f:
+            for chunk in resp.iter_content(chunk_size=1 << 16):
+                f.write(chunk)
+        return str(dest)
+    except Exception as e:
+        logger.warning(f"⚠️ Could not download clip {url}: {e}")
+        return None
+
+
 def stitch_videos(video_paths: List[str], output_path: str) -> Optional[str]:
     """Concatenate video files with ffmpeg. Returns output path or None."""
     if not _ffmpeg_available():
@@ -316,7 +332,8 @@ def display_video_generation_tab(scenes: List[Dict], project_title: str):
                         )
                         result = agent.generate_video(request)
                         if result.video_url:
-                            generated[shot["type"]] = result.video_url
+                            local = _download_clip(result.video_url, scene.get("id","scene"), shot["type"])
+                            generated[shot["type"]] = local or result.video_url
                             st.session_state[clips_key] = generated
                             progress.progress((idx + 1) / len(shots), text=f"✅ {shot['label']} done")
                         else:
@@ -341,14 +358,15 @@ def display_video_generation_tab(scenes: List[Dict], project_title: str):
                 stype = shot["type"]
                 if stype not in generated:
                     continue
-                url = generated[stype]
+                ref = generated[stype]
                 with clip_cols[i % 4]:
                     st.caption(shot["label"])
-                    if Path(url).exists():
-                        st.video(url)
-                        video_paths.append(url)
+                    if Path(ref).exists():
+                        st.video(ref)
+                        video_paths.append(ref)
                     else:
-                        st.info(f"📹 {url[:60]}…")
+                        st.markdown(f"[📥 Download clip]({ref})")
+                        st.caption("URL — not yet stitchable")
 
             st.markdown(f"`{_timeline_bar(shots, generated)}`")
 
@@ -471,10 +489,12 @@ def display_video_generation_tab(scenes: List[Dict], project_title: str):
                     col2.metric("Motion", selected_motion.replace("_", " ").title())
                     col3.metric("Duration", f"{result.duration}s")
                     if result.video_url:
-                        if Path(result.video_url).exists():
-                            st.video(result.video_url)
+                        local = _download_clip(result.video_url, scene.get("id","scene"), "single")
+                        display_path = local or result.video_url
+                        if local and Path(local).exists():
+                            st.video(local)
                         else:
-                            st.info(f"📹 {result.video_url}")
+                            st.markdown(f"[📥 Download video]({result.video_url})")
                 with st.expander("🔍 Debug info", expanded=result.status == "failed"):
                     st.json({
                         "status": result.status,
