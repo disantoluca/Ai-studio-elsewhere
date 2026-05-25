@@ -241,6 +241,31 @@ def merge_audio_video(video_path: str, audio_path: str, output_path: str) -> Opt
         return None
 
 
+def _process_uploaded_photo(image_bytes: bytes) -> Optional[str]:
+    """Decode uploaded photo → center-crop 1280×720 → film effects → base64 data URI."""
+    try:
+        import io, base64
+        from PIL import Image, ImageFilter, ImageEnhance
+        img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+        tw, th = 1280, 720
+        ratio = max(tw / img.width, th / img.height)
+        nw, nh = int(img.width * ratio), int(img.height * ratio)
+        img = img.resize((nw, nh), Image.LANCZOS)
+        left = (nw - tw) // 2
+        top  = (nh - th) // 2
+        img  = img.crop((left, top, left + tw, top + th))
+        img  = img.filter(ImageFilter.GaussianBlur(radius=0.3))
+        img  = ImageEnhance.Contrast(img).enhance(1.1)
+        img  = ImageEnhance.Color(img).enhance(0.95)
+        buf  = io.BytesIO()
+        img.save(buf, format="PNG")
+        b64  = base64.b64encode(buf.getvalue()).decode()
+        return f"data:image/png;base64,{b64}"
+    except Exception as e:
+        logger.error(f"Photo processing failed: {e}")
+        return None
+
+
 # ============================================================
 # TIMELINE BAR
 # ============================================================
@@ -285,10 +310,11 @@ def display_video_generation_tab(scenes: List[Dict], project_title: str):
         st.warning("⚠️ Runway API not configured. Add RUNWAY_API_KEY to Railway environment.")
         return
 
-    tab_director, tab_single, tab_batch = st.tabs([
+    tab_director, tab_single, tab_batch, tab_photo = st.tabs([
         "🎬 Director Mode",
         "🎥 Single Shot",
         "📹 Batch",
+        "📸 Photo → Clip",
     ])
 
     # ── Director Mode ─────────────────────────────────────────
@@ -626,6 +652,95 @@ def display_video_generation_tab(scenes: List[Dict], project_title: str):
                     [{"Scene": r.scene_id, "Status": r.status, "Duration": f"{r.duration}s"} for r in results],
                     use_container_width=True,
                 )
+
+    # ── Photo → Clip ──────────────────────────────────────────
+
+    with tab_photo:
+        st.subheader("📸 Photo → Cinematic Clip")
+        st.caption("Upload any photo — center-cropped to 1280×720, film effects applied, then Runway generates a 5-second cinematic clip.")
+
+        uploaded = st.file_uploader(
+            "Upload reference photo",
+            type=["png", "jpg", "jpeg", "webp"],
+            key="photo_uploader",
+        )
+
+        if uploaded:
+            source_id = f"{uploaded.name}_{uploaded.size}"
+            if st.session_state.get("photo_clip_source_id") != source_id:
+                with st.spinner("Processing image — applying film effects..."):
+                    uri = _process_uploaded_photo(uploaded.getvalue())
+                if uri:
+                    st.session_state["photo_clip_source_id"] = source_id
+                    st.session_state["photo_clip_uri"] = uri
+                    st.session_state.pop("photo_clip_result", None)
+                else:
+                    st.error("❌ Could not process image — try a different file.")
+
+        clip_uri = st.session_state.get("photo_clip_uri")
+
+        if clip_uri:
+            import base64 as _b64ph
+            img_bytes = _b64ph.b64decode(clip_uri.split(",", 1)[1])
+            st.image(img_bytes, caption="Processed — 1280×720 · subtle film grade", use_container_width=True)
+
+            _ph1, _ph2 = st.columns([3, 1])
+            with _ph1:
+                photo_prompt = st.text_area(
+                    "Cinematic prompt",
+                    value=(
+                        "Cinematic film. Slow dolly forward. Shallow depth of field. "
+                        "Film grain. Natural light. Atmospheric movement. "
+                        "Professional cinematography."
+                    ),
+                    height=100,
+                    key="photo_prompt",
+                )
+            with _ph2:
+                photo_style = st.selectbox("Style", list(_DIRECTOR_STYLES.keys()), key="photo_style")
+                photo_dur   = st.slider("Duration (s)", 2, 10, 5, key="photo_dur")
+
+            if st.button("🎬 Generate Clip from Photo", type="primary", use_container_width=True, key="photo_gen"):
+                with st.spinner("⏳ Generating cinematic clip via Runway..."):
+                    import uuid as _uuid_ph
+                    req = VideoGenRequest(
+                        scene_id=f"photo_{_uuid_ph.uuid4().hex[:6]}",
+                        scene_heading="Photo → Clip",
+                        prompt_en=photo_prompt,
+                        motion_type=None,
+                        style=photo_style.lower(),
+                        duration=photo_dur,
+                        prompt_image=clip_uri,
+                        notes=f"Photo upload — {project_title}",
+                    )
+                    result = agent.generate_video(req)
+                if result.video_url:
+                    local = _download_clip(result.video_url, "photo", "clip")
+                    st.session_state["photo_clip_result"] = local or result.video_url
+                    st.success("✅ Clip generated")
+                    st.rerun()
+                else:
+                    err = (result.metadata or {}).get("error", "generation failed")
+                    st.error(f"❌ {err}")
+
+            result_path = st.session_state.get("photo_clip_result")
+            if result_path:
+                st.markdown("#### Generated Clip")
+                if _safe_path_exists(result_path):
+                    st.video(result_path)
+                    with open(result_path, "rb") as _f:
+                        st.download_button(
+                            "⬇ Download Clip",
+                            data=_f.read(),
+                            file_name="photo_clip.mp4",
+                            mime="video/mp4",
+                            key="photo_dl",
+                        )
+                else:
+                    st.markdown(f"[📥 Download clip]({result_path})")
+
+        elif not uploaded:
+            st.info("Upload a photo above to begin.")
 
     # ── History ───────────────────────────────────────────────
 
