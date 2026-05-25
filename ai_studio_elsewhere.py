@@ -990,21 +990,28 @@ def generate_concept_images(scene: SceneBreakdown, style: str = "cinematic", pro
                 ("dall-e-2",    {"size": "1024x1024"}),
             ]
             generated_url = None
+            _model_errors = []
             for _model, _params in _image_models:
                 try:
                     response = openai_client.images.generate(
                         model=_model, prompt=prompt, n=1, **_params,
                     )
                     generated_url = response.data[0].url
+                    print(f"[AI Studio] Image generated via {_model}")
                     break
                 except Exception as e:
-                    st.warning(f"⚠️ {_model} failed: {e}")
+                    _model_errors.append(f"{_model}: {e}")
+                    print(f"[AI Studio] {_model} failed: {e}")
             if generated_url:
                 img_bytes = requests.get(generated_url, timeout=30).content
                 local_path.write_bytes(img_bytes)
                 return [str(local_path)]
+            if _model_errors:
+                st.error("❌ All OpenAI image models failed:\n\n" + "\n\n".join(_model_errors))
+                return []
         else:
-            st.warning(f"⚠️ OpenAI client not available — {_openai_init_error or 'OPENAI_API_KEY not set'}")
+            st.error(f"❌ OpenAI client not available: {_openai_init_error or 'OPENAI_API_KEY not set'}")
+            return []
 
         if JIMENG_AVAILABLE:
             scene_data = {
