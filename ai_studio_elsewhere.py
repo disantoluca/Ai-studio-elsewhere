@@ -984,31 +984,31 @@ def generate_concept_images(scene: SceneBreakdown, style: str = "cinematic", pro
         ).strip()
 
         if openai_client:
+            # Try gpt-image-1 first (latest), fall back to dall-e-2 (widely available)
             _image_models = [
-                ("gpt-image-1", {"size": "1536x1024", "quality": "high"}),
-                ("dall-e-3",    {"size": "1792x1024", "quality": "hd"}),
+                ("gpt-image-1", {"size": "1024x1024"}),
                 ("dall-e-2",    {"size": "1024x1024"}),
             ]
             generated_url = None
             _model_errors = []
             for _model, _params in _image_models:
                 try:
+                    print(f"[AI Studio] Trying {_model} ...")
                     response = openai_client.images.generate(
                         model=_model, prompt=prompt, n=1, **_params,
                     )
                     generated_url = response.data[0].url
-                    print(f"[AI Studio] Image generated via {_model}")
+                    print(f"[AI Studio] ✅ Image generated via {_model}")
                     break
                 except Exception as e:
-                    _model_errors.append(f"{_model}: {e}")
-                    print(f"[AI Studio] {_model} failed: {e}")
+                    _model_errors.append(f"**{_model}**: {e}")
+                    print(f"[AI Studio] ❌ {_model} failed: {e}")
             if generated_url:
                 img_bytes = requests.get(generated_url, timeout=30).content
                 local_path.write_bytes(img_bytes)
                 return [str(local_path)]
-            if _model_errors:
-                st.error("❌ All OpenAI image models failed:\n\n" + "\n\n".join(_model_errors))
-                return []
+            st.error("❌ All OpenAI image models failed:\n\n" + "\n\n".join(_model_errors))
+            return []
         else:
             st.error(f"❌ OpenAI client not available: {_openai_init_error or 'OPENAI_API_KEY not set'}")
             return []
@@ -1942,6 +1942,32 @@ with tab_concepts:
             "WANX_AVAILABLE": WANX_AVAILABLE,
             "DASHSCOPE_API_KEY": "set" if os.getenv("DASHSCOPE_API_KEY") else "MISSING",
         })
+        if st.button("🧪 Test OpenAI Image (gpt-image-1)", key="test_openai_img"):
+            if openai_client:
+                with st.spinner("Calling gpt-image-1 ..."):
+                    try:
+                        _test_resp = openai_client.images.generate(
+                            model="gpt-image-1",
+                            prompt="cinematic film still, coastal village at dusk, 35mm photography",
+                            n=1,
+                            size="1024x1024",
+                        )
+                        st.image(_test_resp.data[0].url)
+                        st.success("✅ gpt-image-1 works!")
+                    except Exception as _test_e:
+                        st.error(f"❌ gpt-image-1 error: {_test_e}")
+                        try:
+                            _test_resp2 = openai_client.images.generate(
+                                model="dall-e-2",
+                                prompt="cinematic film still, coastal village at dusk",
+                                n=1, size="1024x1024",
+                            )
+                            st.image(_test_resp2.data[0].url)
+                            st.success("✅ dall-e-2 works (gpt-image-1 blocked on this account)")
+                        except Exception as _test_e2:
+                            st.error(f"❌ dall-e-2 also failed: {_test_e2}")
+            else:
+                st.error("OpenAI client not initialized")
     
     # Check subscription
     if not subscription_manager.has_feature("concept_images") and not st.session_state.get("is_admin", False):
