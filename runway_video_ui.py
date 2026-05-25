@@ -55,6 +55,18 @@ except ImportError:
     AUDIO_AVAILABLE = False
     def _gen_audio(*a, **kw): return None
 
+try:
+    from narration_agent import (
+        generate_narration as _generate_narration,
+        get_status as _narration_status,
+        LANGUAGES as _NARRATION_LANGUAGES,
+    )
+    NARRATION_AVAILABLE = _narration_status()["available"]
+except ImportError:
+    NARRATION_AVAILABLE = False
+    _NARRATION_LANGUAGES = {}
+    def _generate_narration(*a, **kw): return {"text": None, "audio_path": None, "error": "not loaded"}
+
 # ============================================================
 # DIRECTOR PROMPT ENGINE
 # ============================================================
@@ -266,9 +278,40 @@ def _process_uploaded_photo(image_bytes: bytes) -> Optional[str]:
         return None
 
 
-# ============================================================
-# TIMELINE BAR
-# ============================================================
+def mix_audio_tracks(primary: str, background: str, output_path: str, bg_volume: float = 0.3) -> Optional[str]:
+    """ffmpeg amix: primary at full volume, background at bg_volume. Returns path or None."""
+    if not _ffmpeg_available() or not _safe_path_exists(primary) or not _safe_path_exists(background):
+        return None
+    try:
+        subprocess.run(
+            [_FFMPEG_BIN, "-y", "-i", primary, "-i", background,
+             "-filter_complex", f"amix=inputs=2:duration=first:weights=1 {bg_volume}",
+             output_path],
+            capture_output=True, timeout=60,
+        )
+        return output_path if _safe_path_exists(output_path) else None
+    except Exception:
+        return None
+
+
+# ── Cultural sound profiles ───────────────────────────────────
+
+_SOUND_PROFILES = {
+    "Chinese": "wind, distant temple bell, minimal guzheng resonance, ancient stone atmosphere",
+    "French":  "soft urban air, distant footsteps on stone, minimal piano, café ambience",
+    "Thai":    "humid tropical air, insects, distant water, soft traditional wind tones",
+    "Global":  "natural atmospheric environment, cinematic minimal score, subtle presence",
+}
+
+def _detect_sound_profile(scene: Dict) -> str:
+    desc = (scene.get("prompt", "") + " " + scene.get("heading", "")).lower()
+    if any(w in desc for w in ["temple", "china", "chinese", "beijing", "shanghai", "guzheng", "dynasty"]):
+        return "Chinese"
+    if any(w in desc for w in ["paris", "french", "france", "café", "cafe", "boulangerie", "montmartre"]):
+        return "French"
+    if any(w in desc for w in ["tropical", "thailand", "thai", "jungle", "humid", "mangrove", "monsoon"]):
+        return "Thai"
+    return "Global"
 
 def _timeline_bar(shots: List[Dict], generated: Dict) -> str:
     """ASCII timeline bar — filled if clip exists, empty if not."""
@@ -475,10 +518,14 @@ def display_video_generation_tab(scenes: List[Dict], project_title: str):
             if not AUDIO_AVAILABLE:
                 st.caption("Add ELEVENLABS_API_KEY to Railway to enable ambient sound generation.")
             else:
-                _default_ap = f"{scene.get('heading', '')} — {scene.get('prompt', '')[:80]}"
+                _profile     = _detect_sound_profile(scene)
+                _default_ap  = _SOUND_PROFILES.get(_profile, _SOUND_PROFILES["Global"])
                 _a1, _a2 = st.columns([3, 1])
                 with _a1:
-                    audio_prompt = st.text_input("Sound description", value=_default_ap, key="dir_audio_prompt")
+                    audio_prompt = st.text_input(
+                        f"Sound description  ·  *{_profile} profile auto-detected*",
+                        value=_default_ap, key="dir_audio_prompt",
+                    )
                 with _a2:
                     audio_dur = st.slider("Duration (s)", 3, 22,
                                           min(22, max(3, len(video_paths) * 5)),
@@ -496,6 +543,44 @@ def display_video_generation_tab(scenes: List[Dict], project_title: str):
                     st.audio(st.session_state[f"audio_{clips_key}"])
                     st.caption("Ambient sound ready")
 
+            st.markdown("#### Narration")
+            if not NARRATION_AVAILABLE:
+                st.caption("Narration uses OPENAI_API_KEY — already set for concept art.")
+            else:
+                _nar_key  = f"narration_{clips_key}"
+                _nar_lang = st.selectbox(
+                    "Language",
+                    ["None"] + list(_NARRATION_LANGUAGES.keys()),
+                    key="dir_nar_lang",
+                )
+                if _nar_lang != "None":
+                    if st.button("🗣 Generate Narration", key="dir_gen_nar"):
+                        with st.spinner(f"Generating {_nar_lang} narration via GPT + TTS..."):
+                            _nr = _generate_narration(
+                                scene.get("heading", ""),
+                                scene.get("prompt", ""),
+                                _nar_lang,
+                            )
+                        if _nr["audio_path"]:
+                            st.session_state[_nar_key] = _nr
+                            st.success(f"✅  *{_nr['text']}*")
+                            st.audio(_nr["audio_path"])
+                        else:
+                            st.error(f"❌ {_nr.get('error', 'Failed')}")
+                    elif st.session_state.get(_nar_key):
+                        _nr_saved = st.session_state[_nar_key]
+                        if _safe_path_exists(_nr_saved.get("audio_path", "")):
+                            st.caption(f"*{_nr_saved['text']}*")
+                            st.audio(_nr_saved["audio_path"])
+
+            st.markdown("#### Export Mode")
+            export_mode = st.radio(
+                "Version",
+                ["🎬 Festival (ambient only)", "🌍 Localized (narration + ambient)", "📺 Commercial (narration + strong ambient)"],
+                horizontal=True,
+                key="dir_export_mode",
+            )
+
             if st.button("🎞 Stitch Clips → Scene Video", use_container_width=True, key="dir_stitch"):
                 if not _ffmpeg_available():
                     st.warning("⚠️ ffmpeg not available on this server")
@@ -505,12 +590,37 @@ def display_video_generation_tab(scenes: List[Dict], project_title: str):
                     output = str(Path(video_paths[0]).parent / f"scene_{scene.get('id','assembled')}.mp4")
                     final = stitch_videos(video_paths, output)
                     if final:
-                        _saved_audio = st.session_state.get(f"audio_{clips_key}")
-                        if _saved_audio and _safe_path_exists(_saved_audio):
-                            _mixed = merge_audio_video(final, _saved_audio, final.replace(".mp4", "_audio.mp4"))
-                            if _mixed:
-                                final = _mixed
-                                st.success("✅ Audio merged")
+                        _saved_audio  = st.session_state.get(f"audio_{clips_key}")
+                        _nar_data     = st.session_state.get(f"narration_{clips_key}")
+                        _exp          = st.session_state.get("dir_export_mode", "🎬 Festival (ambient only)")
+                        _nar_path     = None
+                        _bg_vol       = 0.3
+
+                        if "Localized" in _exp or "Commercial" in _exp:
+                            if _nar_data and _safe_path_exists(_nar_data.get("audio_path", "")):
+                                _nar_path = _nar_data["audio_path"]
+                            if "Commercial" in _exp:
+                                _bg_vol = 0.55
+
+                        if _nar_path and _saved_audio and _safe_path_exists(_saved_audio):
+                            _mixed_audio = str(Path(tempfile.gettempdir()) / f"mixed_{scene.get('id','x')}.mp3")
+                            _mixed_audio = mix_audio_tracks(_nar_path, _saved_audio, _mixed_audio, _bg_vol)
+                            if _mixed_audio:
+                                _merged = merge_audio_video(final, _mixed_audio, final.replace(".mp4", "_narrated.mp4"))
+                                if _merged:
+                                    final = _merged
+                                    st.success("✅ Narration + ambient mixed")
+                        elif _nar_path:
+                            _merged = merge_audio_video(final, _nar_path, final.replace(".mp4", "_narrated.mp4"))
+                            if _merged:
+                                final = _merged
+                                st.success("✅ Narration merged")
+                        elif _saved_audio and _safe_path_exists(_saved_audio):
+                            _merged = merge_audio_video(final, _saved_audio, final.replace(".mp4", "_audio.mp4"))
+                            if _merged:
+                                final = _merged
+                                st.success("✅ Ambient merged")
+
                         st.success("✅ Scene assembled")
                         st.video(final)
                         with open(final, "rb") as f:
