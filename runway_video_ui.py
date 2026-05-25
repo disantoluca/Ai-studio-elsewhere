@@ -287,26 +287,39 @@ def display_video_generation_tab(scenes: List[Dict], project_title: str):
                 st.error("❌ Generate concept art first — Runway requires a reference image.")
             else:
                 progress = st.progress(0, text="Starting shot sequence...")
-                for idx, shot in enumerate(shots):
-                    progress.progress(idx / len(shots), text=f"Generating {shot['label']} shot...")
-                    prompt = build_cinematic_video_prompt(scene, shot, director_style)
-                    request = VideoGenRequest(
-                        scene_id=f"{scene.get('id','scene')}_{shot['type']}",
-                        scene_heading=f"{scene.get('heading','')} — {shot['label']}",
-                        prompt_en=prompt,
-                        motion_type=None,
-                        style=director_style.lower(),
-                        duration=5,
-                        prompt_image=concept_image,
-                        notes=f"{project_title} / Director Mode",
-                    )
-                    result = agent.generate_video(request)
-                    if result.video_url:
-                        generated[shot["type"]] = result.video_url
-                        st.session_state[clips_key] = generated
-                progress.progress(1.0, text="All shots generated.")
-                st.success(f"✅ {len(generated)} shots generated")
-                st.rerun()
+                shot_errors = []
+                try:
+                    for idx, shot in enumerate(shots):
+                        progress.progress(idx / len(shots), text=f"Generating {shot['label']} shot...")
+                        prompt = build_cinematic_video_prompt(scene, shot, director_style)
+                        request = VideoGenRequest(
+                            scene_id=f"{scene.get('id','scene')}_{shot['type']}",
+                            scene_heading=f"{scene.get('heading','')} — {shot['label']}",
+                            prompt_en=prompt,
+                            motion_type=None,
+                            style=director_style.lower(),
+                            duration=5,
+                            prompt_image=concept_image,
+                            notes=f"{project_title} / Director Mode",
+                        )
+                        result = agent.generate_video(request)
+                        if result.video_url:
+                            generated[shot["type"]] = result.video_url
+                            st.session_state[clips_key] = generated
+                            progress.progress((idx + 1) / len(shots), text=f"✅ {shot['label']} done")
+                        else:
+                            err = (result.metadata or {}).get("error") or f"status={result.status}"
+                            shot_errors.append(f"**{shot['label']}** ({shot['type']}): {err}")
+                            progress.progress((idx + 1) / len(shots), text=f"❌ {shot['label']} failed")
+                except Exception as exc:
+                    shot_errors.append(f"**Unexpected error**: {type(exc).__name__}: {exc}")
+
+                progress.progress(1.0, text="Done.")
+                if shot_errors:
+                    st.error("Generation errors:\n\n" + "\n\n".join(shot_errors))
+                if generated:
+                    st.success(f"✅ {len(generated)}/{len(shots)} shots generated")
+                    st.rerun()
 
         if generated:
             st.markdown("#### Generated Clips")
@@ -436,16 +449,26 @@ def display_video_generation_tab(scenes: List[Dict], project_title: str):
                         notes=f"Generated for {project_title}",
                     )
                     result = agent.generate_video(request)
-                st.success(f"✅ {result.scene_id}")
-                col1, col2, col3 = st.columns(3)
-                col1.metric("Status", result.status)
-                col2.metric("Motion", selected_motion.replace("_", " ").title())
-                col3.metric("Duration", f"{result.duration}s")
-                if result.video_url:
-                    if Path(result.video_url).exists():
-                        st.video(result.video_url)
-                    else:
-                        st.info(f"📹 {result.video_url}")
+                if result.status == "failed":
+                    err = result.metadata.get("error", "Unknown error") if result.metadata else "generation failed"
+                    st.error(f"❌ Generation failed: {err}")
+                else:
+                    st.success(f"✅ {result.scene_id}")
+                    col1, col2, col3 = st.columns(3)
+                    col1.metric("Status", result.status)
+                    col2.metric("Motion", selected_motion.replace("_", " ").title())
+                    col3.metric("Duration", f"{result.duration}s")
+                    if result.video_url:
+                        if Path(result.video_url).exists():
+                            st.video(result.video_url)
+                        else:
+                            st.info(f"📹 {result.video_url}")
+                with st.expander("🔍 Debug info", expanded=result.status == "failed"):
+                    st.json({
+                        "status": result.status,
+                        "video_url": result.video_url or "(empty)",
+                        "metadata": result.metadata or {},
+                    })
 
     # ── Batch ─────────────────────────────────────────────────
 

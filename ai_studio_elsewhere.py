@@ -259,12 +259,19 @@ try:
 except ImportError:
     RUNWAY_AVAILABLE = False
 
-# Wanxiang for image generation (Phase 1 - recommended but optional)
+# Wanxiang for image generation (concept art mode)
 try:
     from tongyi_wanx_client import TongyiWanxClient
     WANX_AVAILABLE = True
 except ImportError:
     WANX_AVAILABLE = False
+
+# Byteplus / Seadance for cinematic realism mode
+try:
+    import jimeng_agent as _jimeng
+    JIMENG_AVAILABLE = _jimeng.AVAILABLE
+except Exception:
+    JIMENG_AVAILABLE = False
 
 # ===========================================
 # Configuration & Paths
@@ -932,11 +939,64 @@ def rewrite_scene_ai(scene_text: str, style_label: str = 'Improve (general)') ->
 # Concept Image Generation (Wanxiang)
 # ===========================================
 
-def generate_concept_images(scene: SceneBreakdown, style: str = "cinematic", project_id: str = "") -> List[str]:
+def generate_concept_images(scene: SceneBreakdown, style: str = "cinematic", project_id: str = "", mode: str = "concept") -> List[str]:
     """
-    Generate concept images for a scene using Wanxiang.
+    Generate concept images. mode="concept" uses Wanxiang; mode="cinematic" uses Byteplus Seedream.
     Downloads images to CONCEPTS_DIR and returns local file paths.
     """
+
+    concept_dir = CONCEPTS_DIR / (project_id or "default")
+    concept_dir.mkdir(parents=True, exist_ok=True)
+    safe_id = scene.scene_id.replace('/', '_')
+
+    # ── Cinematic Realism mode — DALL-E 3 primary, Byteplus fallback ──
+    if mode == "cinematic":
+        local_path = concept_dir / f"{safe_id}_cinematic.png"
+
+        # DALL-E 3 path (uses already-configured openai_client)
+        if openai_client:
+            prompt = (
+                f"Cinematic film still, 35mm photography, ultra photorealistic. "
+                f"Scene: {scene.heading}. "
+                f"Location: {scene.location}, {scene.time_of_day}. "
+                f"Mood: {scene.mood or 'dramatic'}. "
+                f"{', '.join(scene.keywords) if scene.keywords else ''}. "
+                f"{scene.action[:200]}. "
+                f"Natural textures, weathered surfaces, volumetric light, "
+                f"film grain, shallow depth of field, imperfect realistic lighting. "
+                f"Shot on ARRI Alexa, anamorphic lens. No CGI, no illustration, no painting."
+            )
+            try:
+                response = openai_client.images.generate(
+                    model="dall-e-3",
+                    prompt=prompt,
+                    size="1792x1024",
+                    quality="hd",
+                    style="natural",
+                    n=1,
+                )
+                url = response.data[0].url
+                img_bytes = requests.get(url, timeout=30).content
+                local_path.write_bytes(img_bytes)
+                return [str(local_path)]
+            except Exception as e:
+                st.warning(f"⚠️ DALL-E 3 failed: {e}")
+
+        # Byteplus fallback
+        if JIMENG_AVAILABLE:
+            scene_data = {
+                "heading": scene.heading, "location": scene.location,
+                "time_of_day": scene.time_of_day, "mood": scene.mood,
+                "keywords": scene.keywords, "action": scene.action,
+            }
+            result = _jimeng.generate_cinematic_image(scene_data, local_path)
+            if result:
+                return [result]
+
+        st.error("❌ Cinematic mode needs OpenAI or Byteplus API key configured.")
+        return []
+
+    # ── Concept Art mode (Wanxiang) ─────────────────────────────
     if not WANX_AVAILABLE or not os.getenv("DASHSCOPE_API_KEY"):
         st.warning("⚠️ Wanxiang API not configured. Skipping image generation.")
         return []
@@ -968,19 +1028,15 @@ def generate_concept_images(scene: SceneBreakdown, style: str = "cinematic", pro
 
         if result.get('status') == 'succeeded' and result.get('images'):
             urls = result['images']
-            # Download immediately — Wanxiang URLs are temporary
-            concept_dir = CONCEPTS_DIR / (project_id or "default")
-            concept_dir.mkdir(parents=True, exist_ok=True)
             local_paths = []
             for j, url in enumerate(urls):
-                safe_id = scene.scene_id.replace('/', '_')
                 local_path = concept_dir / f"{safe_id}_{j}.png"
                 try:
                     img_data = requests.get(url, timeout=15).content
                     local_path.write_bytes(img_data)
                     local_paths.append(str(local_path))
                 except Exception:
-                    local_paths.append(url)  # keep URL as fallback
+                    local_paths.append(url)
             return local_paths
         else:
             st.warning(f"⚠️ Image generation failed: {result.get('error', 'Unknown error')}")
@@ -1303,7 +1359,24 @@ st.sidebar.subheader("📝 Translation (OpenAI)")
 openai_status = "✅ Configured" if os.getenv("OPENAI_API_KEY") else "⚠️ Not set"
 st.sidebar.info(f"OpenAI API: {openai_status}")
 
-st.sidebar.subheader("🎨 Image Generation (Wanxiang)")
+st.sidebar.subheader("🎬 Cinematic Realism (Byteplus)")
+byteplus_key = st.sidebar.text_input(
+    "Byteplus API Key",
+    type="password",
+    value=os.getenv("BYTEPLUS_API_KEY", ""),
+    help="ark-xxxx key from console.byteplus.com"
+)
+if byteplus_key:
+    os.environ["BYTEPLUS_API_KEY"] = byteplus_key
+    if not JIMENG_AVAILABLE:
+        import jimeng_agent as _jimeng
+        _jimeng.BYTEPLUS_API_KEY = byteplus_key
+        _jimeng.AVAILABLE = True
+    st.sidebar.success("✅ Byteplus Seedream configured")
+elif openai_client:
+    st.sidebar.info("🎬 Cinematic mode: DALL-E 3 (OpenAI) active")
+
+st.sidebar.subheader("🎨 Concept Art (Wanxiang)")
 dashscope_key = st.sidebar.text_input(
     "DashScope API Key",
     type="password",
@@ -1803,10 +1876,12 @@ with tab_scenes:
                                     options=list(_REWRITE_STYLES.keys()),
                                     key=f"rwstyle_{i}"
                                 )
+                                rw_key = f"rw_result_{scene.scene_id}"
                                 if st.button("Rewrite scene", key=f"rw_{i}"):
                                     with st.spinner("Rewriting..."):
-                                        rewritten = rewrite_scene_ai(scene.action, style_choice)
-                                    st.markdown("**Rewritten version:**")
+                                        st.session_state[rw_key] = rewrite_scene_ai(scene.action, style_choice)
+                                if st.session_state.get(rw_key):
+                                    rewritten = st.session_state[rw_key]
                                     col_orig, col_new = st.columns(2)
                                     with col_orig:
                                         st.caption("Original")
@@ -1814,6 +1889,12 @@ with tab_scenes:
                                     with col_new:
                                         st.caption(f"{style_choice}")
                                         st.write(rewritten)
+                                    if st.button("✅ Apply this rewrite", key=f"rw_apply_{i}"):
+                                        scene.action = rewritten
+                                        del st.session_state[rw_key]
+                                        save_project(project)
+                                        st.success("Rewrite saved.")
+                                        st.rerun()
 
 # ===========================================
 # Tab: Concept Images
@@ -1859,6 +1940,26 @@ with tab_concepts:
                 "Art Style",
                 ["Cinematic", "Documentary", "Surreal", "Minimalist", "Neon Noir"]
             )
+
+            # Image generation mode
+            col_mode, col_info = st.columns([2, 3])
+            with col_mode:
+                image_mode = st.radio(
+                    "Generation Mode",
+                    ["🎬 Cinematic Realism", "🎨 Concept Art"],
+                    horizontal=True,
+                    help="Cinematic Realism uses Byteplus Seedream (photorealistic film). Concept Art uses Wanxiang (illustrated).",
+                )
+            with col_info:
+                if "Cinematic" in image_mode:
+                    if JIMENG_AVAILABLE:
+                        st.success("✅ Byteplus Seedream connected — photorealistic output")
+                    else:
+                        st.warning("⚠️ Add BYTEPLUS_API_KEY to Railway variables")
+                else:
+                    st.info("Wanxiang — illustrated concept art style")
+
+            image_gen_mode = "cinematic" if "Cinematic" in image_mode else "concept"
             
             # Select scenes to generate concepts for
             scene_options = {f"Scene {s.scene_number}: {s.heading}": i for i, s in enumerate(project.scenes)}
@@ -1873,7 +1974,7 @@ with tab_concepts:
                         scene = project.scenes[scene_idx]
                         
                         with st.spinner(f"Generating concepts for {scene_label}..."):
-                            images = generate_concept_images(scene, style.lower(), project_id=project.project_id)
+                            images = generate_concept_images(scene, style.lower(), project_id=project.project_id, mode=image_gen_mode)
 
                             if images:
                                 project.concepts[scene.scene_id] = images
