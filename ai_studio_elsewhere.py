@@ -984,17 +984,32 @@ def generate_concept_images(scene: SceneBreakdown, style: str = "cinematic", pro
         ).strip()
 
         if openai_client:
-            # gpt-image-1 returns b64_json (not a URL) — decode directly
+            # gpt-image-1 returns b64_json — request widest size then crop to 16:9 for Runway
             try:
                 import base64 as _b64
-                print(f"[AI Studio] Calling gpt-image-1 ...")
+                from PIL import Image as _PILImage
+                from io import BytesIO as _BytesIO
+                print(f"[AI Studio] Calling gpt-image-1 (1536x1024) ...")
                 _resp = openai_client.images.generate(
-                    model="gpt-image-1", prompt=prompt, n=1, size="1024x1024",
+                    model="gpt-image-1", prompt=prompt, n=1, size="1536x1024",
                 )
-                _img_bytes = _b64.b64decode(_resp.data[0].b64_json)
+                _raw_bytes = _b64.b64decode(_resp.data[0].b64_json)
+                # Center-crop to 1280×720 (16:9) for Runway compatibility
+                _pil = _PILImage.open(_BytesIO(_raw_bytes))
+                _target_w, _target_h = 1280, 720
+                _src_w, _src_h = _pil.size
+                _scale = max(_target_w / _src_w, _target_h / _src_h)
+                _resized = _pil.resize(
+                    (int(_src_w * _scale), int(_src_h * _scale)),
+                    _PILImage.LANCZOS,
+                )
+                _rw, _rh = _resized.size
+                _left = (_rw - _target_w) // 2
+                _top  = (_rh - _target_h) // 2
+                _img_final = _resized.crop((_left, _top, _left + _target_w, _top + _target_h))
                 local_path.parent.mkdir(parents=True, exist_ok=True)
-                local_path.write_bytes(_img_bytes)
-                print(f"[AI Studio] ✅ gpt-image-1 saved to {local_path}")
+                _img_final.save(str(local_path), "PNG")
+                print(f"[AI Studio] ✅ gpt-image-1 1280×720 saved to {local_path}")
                 return [str(local_path)]
             except Exception as _e:
                 print(f"[AI Studio] ❌ gpt-image-1 failed: {_e}")
