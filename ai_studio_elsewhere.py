@@ -1322,8 +1322,6 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-st.warning("🔥 BUILD v2025-05-25b — if you see this, new code is live")
-
 st.markdown("""
 <style>
 .stApp {
@@ -2253,9 +2251,7 @@ with tab_video:
                 from runway_video_ui import display_video_generation_tab
                 display_video_generation_tab(scenes_for_video, project.title_en)
             except Exception as _video_err:
-                import traceback as _tb
                 st.error(f"⚠️ Video module error: {_video_err}")
-                st.code(_tb.format_exc(), language="text")
                 st.markdown("---")
                 
                 # Demo fallback: let directors preview workflow without API

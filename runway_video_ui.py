@@ -348,8 +348,6 @@ def display_video_generation_tab(scenes: List[Dict], project_title: str):
                     for idx, shot in enumerate(shots):
                         progress.progress(idx / len(shots), text=f"Generating {shot['label']} shot...")
                         prompt = build_cinematic_video_prompt(scene, shot, director_style)
-                        if isinstance(concept_image, str) and concept_image.startswith("data:image"):
-                            raise ValueError(f"🚨 DATA URI passed as prompt_image (len={len(concept_image)})")
                         request = VideoGenRequest(
                             scene_id=f"{scene.get('id','scene')}_{shot['type']}",
                             scene_heading=f"{scene.get('heading','')} — {shot['label']}",
