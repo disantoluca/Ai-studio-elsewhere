@@ -48,6 +48,13 @@ except ImportError:
     RUNWAY_AVAILABLE = False
     logger.warning("⚠️ Runway Video Agent not available")
 
+try:
+    from audio_agent import generate_ambient_sound as _gen_audio, get_status as _audio_status
+    AUDIO_AVAILABLE = _audio_status()["available"]
+except ImportError:
+    AUDIO_AVAILABLE = False
+    def _gen_audio(*a, **kw): return None
+
 # ============================================================
 # DIRECTOR PROMPT ENGINE
 # ============================================================
@@ -211,6 +218,23 @@ def apply_color_grade(video_path: str, grade_filter: str, output_path: str) -> O
             [_FFMPEG_BIN, "-y", "-i", video_path,
              "-vf", grade_filter, "-c:a", "copy", output_path],
             capture_output=True, timeout=120
+        )
+        return output_path if _safe_path_exists(output_path) else None
+    except Exception:
+        return None
+
+
+def merge_audio_video(video_path: str, audio_path: str, output_path: str) -> Optional[str]:
+    """Mix audio track into video with ffmpeg. Returns output path or None."""
+    if not _ffmpeg_available() or not _safe_path_exists(video_path) or not _safe_path_exists(audio_path):
+        return None
+    try:
+        subprocess.run(
+            [_FFMPEG_BIN, "-y", "-i", video_path, "-i", audio_path,
+             "-c:v", "copy", "-c:a", "aac",
+             "-map", "0:v:0", "-map", "1:a:0",
+             "-shortest", output_path],
+            capture_output=True, timeout=120,
         )
         return output_path if _safe_path_exists(output_path) else None
     except Exception:
@@ -421,6 +445,31 @@ def display_video_generation_tab(scenes: List[Dict], project_title: str):
                     if graded:
                         st.success(f"✅ Graded {len(graded)} clips")
 
+            st.markdown("#### Ambient Audio")
+            if not AUDIO_AVAILABLE:
+                st.caption("Add ELEVENLABS_API_KEY to Railway to enable ambient sound generation.")
+            else:
+                _default_ap = f"{scene.get('heading', '')} — {scene.get('prompt', '')[:80]}"
+                _a1, _a2 = st.columns([3, 1])
+                with _a1:
+                    audio_prompt = st.text_input("Sound description", value=_default_ap, key="dir_audio_prompt")
+                with _a2:
+                    audio_dur = st.slider("Duration (s)", 3, 22,
+                                          min(22, max(3, len(video_paths) * 5)),
+                                          key="dir_audio_dur")
+                if st.button("🎵 Generate Ambient Sound", key="dir_gen_audio"):
+                    with st.spinner("Generating ambient sound via ElevenLabs..."):
+                        _ap = _gen_audio(audio_prompt, float(audio_dur))
+                    if _ap:
+                        st.session_state[f"audio_{clips_key}"] = _ap
+                        st.audio(_ap)
+                        st.success("✅ Ambient sound ready — stitch clips to merge")
+                    else:
+                        st.error("❌ Audio generation failed — check ELEVENLABS_API_KEY")
+                elif st.session_state.get(f"audio_{clips_key}") and _safe_path_exists(st.session_state[f"audio_{clips_key}"]):
+                    st.audio(st.session_state[f"audio_{clips_key}"])
+                    st.caption("Ambient sound ready")
+
             if st.button("🎞 Stitch Clips → Scene Video", use_container_width=True, key="dir_stitch"):
                 if not _ffmpeg_available():
                     st.warning("⚠️ ffmpeg not available on this server")
@@ -430,6 +479,12 @@ def display_video_generation_tab(scenes: List[Dict], project_title: str):
                     output = str(Path(video_paths[0]).parent / f"scene_{scene.get('id','assembled')}.mp4")
                     final = stitch_videos(video_paths, output)
                     if final:
+                        _saved_audio = st.session_state.get(f"audio_{clips_key}")
+                        if _saved_audio and _safe_path_exists(_saved_audio):
+                            _mixed = merge_audio_video(final, _saved_audio, final.replace(".mp4", "_audio.mp4"))
+                            if _mixed:
+                                final = _mixed
+                                st.success("✅ Audio merged")
                         st.success("✅ Scene assembled")
                         st.video(final)
                         with open(final, "rb") as f:

@@ -1952,6 +1952,7 @@ with tab_concepts:
             "JIMENG_AVAILABLE": JIMENG_AVAILABLE,
             "WANX_AVAILABLE": WANX_AVAILABLE,
             "DASHSCOPE_API_KEY": "set" if os.getenv("DASHSCOPE_API_KEY") else "MISSING",
+            "ELEVENLABS_API_KEY": "set" if os.getenv("ELEVENLABS_API_KEY") else "MISSING",
         })
         if st.button("🧪 Test OpenAI Image (gpt-image-1)", key="test_openai_img"):
             if openai_client:
