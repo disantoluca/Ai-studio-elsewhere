@@ -1000,6 +1000,8 @@ def generate_concept_images(scene: SceneBreakdown, style: str = "cinematic", pro
                 img_bytes = requests.get(generated_url, timeout=30).content
                 local_path.write_bytes(img_bytes)
                 return [str(local_path)]
+        else:
+            st.warning(f"⚠️ OpenAI client not available — {_openai_init_error or 'OPENAI_API_KEY not set'}")
 
         if JIMENG_AVAILABLE:
             scene_data = {
