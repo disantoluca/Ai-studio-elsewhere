@@ -939,59 +939,68 @@ def rewrite_scene_ai(scene_text: str, style_label: str = 'Improve (general)') ->
 # Concept Image Generation (Wanxiang)
 # ===========================================
 
-def generate_concept_images(scene: SceneBreakdown, style: str = "cinematic", project_id: str = "", mode: str = "concept") -> List[str]:
-    """
-    Generate concept images. mode="concept" uses Wanxiang; mode="cinematic" uses Byteplus Seedream.
-    Downloads images to CONCEPTS_DIR and returns local file paths.
-    """
+def generate_concept_images(scene: SceneBreakdown, style: str = "cinematic", project_id: str = "", mode: str = "concept", output_type: str = "Cinematic Frame (for video)", video_ready: bool = True) -> List[str]:
+    """Generate concept images. mode='concept' uses Wanxiang; mode='cinematic' uses OpenAI/Byteplus."""
 
     concept_dir = CONCEPTS_DIR / (project_id or "default")
     concept_dir.mkdir(parents=True, exist_ok=True)
     safe_id = scene.scene_id.replace('/', '_')
 
-    # ── Cinematic Realism mode — DALL-E 3 primary, Byteplus fallback ──
+    # ── Cinematic Realism mode ────────────────────────────────────────
     if mode == "cinematic":
         local_path = concept_dir / f"{safe_id}_cinematic.png"
 
-        # DALL-E 3 path (uses already-configured openai_client)
+        direction_map = {
+            "natural realism":       "natural light, realistic textures, everyday physicality",
+            "noir b&w":              "high contrast black and white, deep shadows, dramatic single-source light, 1940s atmosphere",
+            "dreamlike":             "soft diffused light, hazy atmosphere, surreal gentle realism, ethereal quality",
+            "gritty realism":        "harsh light, rough textures, grime and wear, raw documentary feel",
+            "period film (1940s)":   "1940s period authentic, warm sepia tones, period-accurate details, classic Hollywood lighting",
+            "poetic cinema":         "painterly naturalism, golden hour light, wide sky, long shadows, contemplative stillness",
+        }
+        output_map = {
+            "cinematic frame (for video)": "ultra realistic film still, shot on ARRI Alexa, anamorphic lens",
+            "storyboard frame":            "clear compositional storyboard, strong readable shapes",
+            "reference photography":       "location photography reference, realistic environment, production design quality",
+            "mood exploration":            "atmospheric mood study, evocative lighting, strong emotional tone",
+        }
+        direction_words = direction_map.get(style.lower(), "cinematic naturalism")
+        output_words    = output_map.get(output_type.lower(), "cinematic film still")
+        video_words = (
+            "photorealistic, real-world physics, natural motion potential, "
+            "no illustration, no painting, no stylization"
+        ) if video_ready else ""
+
+        prompt = (
+            f"{output_words}. {direction_words}. "
+            f"Scene: {scene.heading}. Location: {scene.location}, {scene.time_of_day}. "
+            f"Mood: {scene.mood or 'dramatic'}. "
+            f"{', '.join(scene.keywords) if scene.keywords else ''}. "
+            f"{scene.action[:200]}. "
+            f"Film grain, shallow depth of field, imperfect realistic lighting. {video_words}"
+        ).strip()
+
         if openai_client:
-            prompt = (
-                f"Cinematic film still, 35mm photography, ultra photorealistic. "
-                f"Scene: {scene.heading}. "
-                f"Location: {scene.location}, {scene.time_of_day}. "
-                f"Mood: {scene.mood or 'dramatic'}. "
-                f"{', '.join(scene.keywords) if scene.keywords else ''}. "
-                f"{scene.action[:200]}. "
-                f"Natural textures, weathered surfaces, volumetric light, "
-                f"film grain, shallow depth of field, imperfect realistic lighting. "
-                f"Shot on ARRI Alexa, anamorphic lens. No CGI, no illustration, no painting."
-            )
-        # Try image models in order of quality
-        _image_models = [
-            ("gpt-image-1", {"size": "1536x1024", "quality": "high"}),
-            ("dall-e-3",    {"size": "1792x1024", "quality": "hd"}),
-            ("dall-e-2",    {"size": "1024x1024"}),
-        ]
-        generated_url = None
-        for _model, _params in _image_models:
-            try:
-                response = openai_client.images.generate(
-                    model=_model,
-                    prompt=prompt,
-                    n=1,
-                    **_params,
-                )
-                generated_url = response.data[0].url
-                break
-            except Exception as e:
-                st.warning(f"⚠️ {_model} failed: {e}")
+            _image_models = [
+                ("gpt-image-1", {"size": "1536x1024", "quality": "high"}),
+                ("dall-e-3",    {"size": "1792x1024", "quality": "hd"}),
+                ("dall-e-2",    {"size": "1024x1024"}),
+            ]
+            generated_url = None
+            for _model, _params in _image_models:
+                try:
+                    response = openai_client.images.generate(
+                        model=_model, prompt=prompt, n=1, **_params,
+                    )
+                    generated_url = response.data[0].url
+                    break
+                except Exception as e:
+                    st.warning(f"⚠️ {_model} failed: {e}")
+            if generated_url:
+                img_bytes = requests.get(generated_url, timeout=30).content
+                local_path.write_bytes(img_bytes)
+                return [str(local_path)]
 
-        if generated_url:
-            img_bytes = requests.get(generated_url, timeout=30).content
-            local_path.write_bytes(img_bytes)
-            return [str(local_path)]
-
-        # Byteplus fallback
         if JIMENG_AVAILABLE:
             scene_data = {
                 "heading": scene.heading, "location": scene.location,
@@ -1944,71 +1953,134 @@ with tab_concepts:
             st.warning("⚠️ Extract scenes first (Scene Breakdown tab)")
         else:
             st.markdown(f"### {project.title_en}")
-            
-            style = st.selectbox(
-                "Art Style",
-                ["Cinematic", "Documentary", "Surreal", "Minimalist", "Neon Noir"]
-            )
 
-            # Image generation mode
+            # ── Controls row ─────────────────────────────────────────
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                visual_direction = st.selectbox(
+                    "🎬 Visual Direction",
+                    ["Natural Realism", "Noir B&W", "Dreamlike",
+                     "Gritty Realism", "Period Film (1940s)", "Poetic Cinema"],
+                )
+            with c2:
+                output_type = st.selectbox(
+                    "🎯 Output Type",
+                    ["Cinematic Frame (for video)", "Storyboard Frame",
+                     "Reference Photography", "Mood Exploration"],
+                )
+            with c3:
+                video_ready = st.checkbox("🎥 Optimize for Video Generation", value=True,
+                    help="Enforces photorealism and natural motion potential — ensures Runway behaves correctly")
+
+            # ── Generation Mode ───────────────────────────────────────
             col_mode, col_info = st.columns([2, 3])
             with col_mode:
                 image_mode = st.radio(
                     "Generation Mode",
                     ["🎬 Cinematic Realism", "🎨 Concept Art"],
                     horizontal=True,
-                    help="Cinematic Realism uses Byteplus Seedream (photorealistic film). Concept Art uses Wanxiang (illustrated).",
                 )
             with col_info:
                 if "Cinematic" in image_mode:
-                    if JIMENG_AVAILABLE:
+                    if openai_client:
+                        st.success("🎬 Cinematic mode: DALL-E 3 / gpt-image-1 — photorealistic output")
+                    elif JIMENG_AVAILABLE:
                         st.success("✅ Byteplus Seedream connected — photorealistic output")
                     else:
-                        st.warning("⚠️ Add BYTEPLUS_API_KEY to Railway variables")
+                        st.warning("⚠️ Add OPENAI_API_KEY or BYTEPLUS_API_KEY")
                 else:
-                    st.info("Wanxiang — illustrated concept art style")
+                    st.info("🎨 Wanxiang — illustrated concept art style")
 
             image_gen_mode = "cinematic" if "Cinematic" in image_mode else "concept"
-            
-            # Select scenes to generate concepts for
+
+            # ── Scene selection ───────────────────────────────────────
             scene_options = {f"Scene {s.scene_number}: {s.heading}": i for i, s in enumerate(project.scenes)}
             selected_scenes = st.multiselect("Select scenes", list(scene_options.keys()))
-            
-            if st.button("🎨 Generate Concept Images", type="primary", use_container_width=True):
-                if not selected_scenes:
-                    st.warning("⚠️ Select at least one scene")
-                else:
-                    for scene_label in selected_scenes:
-                        scene_idx = scene_options[scene_label]
-                        scene = project.scenes[scene_idx]
-                        
-                        with st.spinner(f"Generating concepts for {scene_label}..."):
-                            images = generate_concept_images(scene, style.lower(), project_id=project.project_id, mode=image_gen_mode)
 
-                            if images:
-                                project.concepts[scene.scene_id] = images
-                                save_project(project)
+            btn_col1, btn_col2 = st.columns(2)
+            with btn_col1:
+                do_generate = st.button("🎨 Generate", type="primary", use_container_width=True)
+            with btn_col2:
+                do_compare = st.button("⚡ Compare Both Models", use_container_width=True,
+                    help="Generate the same scene with Concept Art AND Cinematic Realism side by side")
 
-                                st.success(f"✅ Generated {len(images)} concepts")
+            # ── Helpers ───────────────────────────────────────────────
+            def _render_concept_card(img_path: str, scene, key_suffix: str):
+                try:
+                    st.image(img_path, use_container_width=True)
+                except Exception:
+                    st.write(f"[Image]({img_path})")
+                p = Path(img_path)
+                a1, a2, a3 = st.columns(3)
+                with a1:
+                    if p.exists():
+                        st.download_button("⬇ Save", data=p.read_bytes(),
+                            file_name=p.name, mime="image/png", key=f"dl_{key_suffix}")
+                with a2:
+                    if st.button("🎬 Use as Video Base", key=f"vb_{key_suffix}"):
+                        st.session_state["video_base_scene_id"] = scene.scene_id
+                        st.session_state["video_base_image_path"] = img_path
+                        st.success("✅ Set as video base — go to Video Generation tab")
+                with a3:
+                    if st.button("↺ Regenerate", key=f"regen_{key_suffix}"):
+                        st.session_state[f"regen_{scene.scene_id}"] = True
+                        st.rerun()
 
-                                cols = st.columns(2)
-                                for j, img_path in enumerate(images[:4]):
-                                    with cols[j % 2]:
-                                        try:
-                                            st.image(img_path, caption=f"Concept {j+1}")
-                                            img_bytes = Path(img_path).read_bytes() if Path(img_path).exists() else None
-                                            if img_bytes:
-                                                st.download_button(
-                                                    label="⬇ Download",
-                                                    data=img_bytes,
-                                                    file_name=f"{scene.scene_id}_concept_{j+1}.png",
-                                                    mime="image/png",
-                                                    key=f"dl_new_{scene.scene_id}_{j}",
-                                                )
-                                        except Exception:
-                                            st.write(f"[Image {j+1}]({img_path})")
+            # ── Generate ──────────────────────────────────────────────
+            if (do_generate or do_compare) and not selected_scenes:
+                st.warning("⚠️ Select at least one scene")
 
-            # ── Show previously generated concepts ───────────────────────────
+            if do_generate and selected_scenes:
+                for scene_label in selected_scenes:
+                    scene = project.scenes[scene_options[scene_label]]
+                    st.markdown(f"#### 🎬 {scene.heading}")
+                    with st.spinner(f"Generating..."):
+                        images = generate_concept_images(
+                            scene, visual_direction.lower(),
+                            project_id=project.project_id,
+                            mode=image_gen_mode,
+                            output_type=output_type,
+                            video_ready=video_ready,
+                        )
+                    if images:
+                        project.concepts[scene.scene_id] = images
+                        save_project(project)
+                        for j, img_path in enumerate(images[:4]):
+                            _render_concept_card(img_path, scene, f"gen_{scene.scene_id}_{j}")
+
+            if do_compare and selected_scenes:
+                for scene_label in selected_scenes:
+                    scene = project.scenes[scene_options[scene_label]]
+                    st.markdown(f"#### ⚡ {scene.heading} — Model Comparison")
+                    col_a, col_b = st.columns(2)
+                    with col_a:
+                        st.markdown("**🎨 Concept Art** *(Wanxiang — illustrated)*")
+                        with st.spinner("Concept Art..."):
+                            imgs_concept = generate_concept_images(
+                                scene, visual_direction.lower(),
+                                project_id=project.project_id, mode="concept",
+                                output_type=output_type, video_ready=False,
+                            )
+                        if imgs_concept:
+                            _render_concept_card(imgs_concept[0], scene, f"cmp_concept_{scene.scene_id}")
+                    with col_b:
+                        st.markdown("**🎬 Cinematic Realism** *(photorealistic — video-ready)*")
+                        with st.spinner("Cinematic Realism..."):
+                            imgs_cine = generate_concept_images(
+                                scene, visual_direction.lower(),
+                                project_id=project.project_id, mode="cinematic",
+                                output_type=output_type, video_ready=True,
+                            )
+                        if imgs_cine:
+                            st.success("🎥 Best for video generation")
+                            _render_concept_card(imgs_cine[0], scene, f"cmp_cine_{scene.scene_id}")
+                    # Save cinematic as primary if generated
+                    best = imgs_cine or imgs_concept
+                    if best:
+                        project.concepts[scene.scene_id] = best
+                        save_project(project)
+
+            # ── Previously generated ──────────────────────────────────
             if project.concepts:
                 st.markdown("---")
                 st.markdown("#### Previously Generated Concepts")
@@ -2016,23 +2088,11 @@ with tab_concepts:
                     paths = project.concepts.get(scene.scene_id, [])
                     if not paths:
                         continue
-                    st.markdown(f"**{scene.heading}**")
-                    cols = st.columns(min(len(paths), 4))
-                    for j, img_path in enumerate(paths[:4]):
+                    st.markdown(f"**🎬 {scene.heading}**")
+                    cols = st.columns(min(len(paths), 3))
+                    for j, img_path in enumerate(paths[:3]):
                         with cols[j]:
-                            try:
-                                st.image(img_path, caption=f"Concept {j+1}")
-                                p = Path(img_path)
-                                if p.exists():
-                                    st.download_button(
-                                        label="⬇ Download",
-                                        data=p.read_bytes(),
-                                        file_name=f"{scene.scene_id}_concept_{j+1}.png",
-                                        mime="image/png",
-                                        key=f"dl_saved_{scene.scene_id}_{j}",
-                                    )
-                            except Exception:
-                                st.write(f"[Image {j+1}]({img_path})")
+                            _render_concept_card(img_path, scene, f"saved_{scene.scene_id}_{j}")
 
 # ===========================================
 # Tab: Video Generation
