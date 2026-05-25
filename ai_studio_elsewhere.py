@@ -197,12 +197,15 @@ try:
     _openai_api_key = os.getenv("OPENAI_API_KEY")
     if _openai_api_key:
         openai_client = _OpenAI(api_key=_openai_api_key)
+        print(f"[AI Studio] OpenAI client initialized OK (key prefix: {_openai_api_key[:8]}...)")
     else:
         openai_client = None
         _openai_init_error = "OPENAI_API_KEY not found in environment"
+        print(f"[AI Studio] OpenAI client NOT initialized: OPENAI_API_KEY missing")
 except Exception as e:
     openai_client = None
     _openai_init_error = str(e)
+    print(f"[AI Studio] OpenAI client init FAILED: {e}")
 
 # Runway Characters (Latest GWM-1)
 try:
@@ -1922,6 +1925,16 @@ with tab_scenes:
 
 with tab_concepts:
     st.subheader("🎨 Generate Concept Images")
+
+    with st.expander("🔍 Provider Status", expanded=False):
+        st.json({
+            "openai_client": "✅ ready" if openai_client else f"❌ None — {_openai_init_error}",
+            "OPENAI_API_KEY": "set" if os.getenv("OPENAI_API_KEY") else "MISSING",
+            "BYTEPLUS_API_KEY": "set" if os.getenv("BYTEPLUS_API_KEY") else "MISSING",
+            "JIMENG_AVAILABLE": JIMENG_AVAILABLE,
+            "WANX_AVAILABLE": WANX_AVAILABLE,
+            "DASHSCOPE_API_KEY": "set" if os.getenv("DASHSCOPE_API_KEY") else "MISSING",
+        })
     
     # Check subscription
     if not subscription_manager.has_feature("concept_images") and not st.session_state.get("is_admin", False):
