@@ -19,6 +19,7 @@ if str(_AGENTS_DIR) not in sys.path:
 try:
     from cinematic_localization_agent import (
         LocalizationMemory,
+        LocalizationBible,
         LocalizationOrchestrator,
         LocalizationResult,
         SegmentationAgent,
@@ -37,27 +38,134 @@ except ImportError as e:
 # Helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _build_memory_from_form(phrase_raw: str, voice_raw: str) -> LocalizationMemory:
-    memory = LocalizationMemory()
-    for line in phrase_raw.strip().split("\n"):
+def _parse_phrase_locks(raw: str) -> dict:
+    locks = {}
+    for line in raw.strip().split("\n"):
         line = line.strip()
-        if "→" in line:
-            src, tgt = line.split("→", 1)
-            memory.phrase_lock[src.strip()] = tgt.strip()
-        elif "->" in line:
-            src, tgt = line.split("->", 1)
-            memory.phrase_lock[src.strip()] = tgt.strip()
-    for line in voice_raw.strip().split("\n"):
+        sep = "→" if "→" in line else ("->" if "->" in line else None)
+        if sep:
+            src, tgt = line.split(sep, 1)
+            locks[src.strip()] = tgt.strip()
+    return locks
+
+def _parse_character_voices(raw: str) -> dict:
+    voices = {}
+    for line in raw.strip().split("\n"):
         line = line.strip()
         if ":" in line:
             name, desc = line.split(":", 1)
-            memory.character_voice[name.strip()] = desc.strip()
-    return memory
+            voices[name.strip()] = desc.strip()
+    return voices
 
+def _locks_to_text(locks: dict) -> str:
+    return "\n".join(f"{k} → {v}" for k, v in locks.items())
+
+def _voices_to_text(voices: dict) -> str:
+    return "\n".join(f"{k}: {v}" for k, v in voices.items())
 
 def _status_badge(status: str) -> str:
     colors = {"approved": "green", "revise": "red", "pending": "orange"}
     return f":{colors.get(status, 'gray')}[{status.upper()}]"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Bible management panel
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _render_bible_panel() -> Optional["LocalizationBible"]:
+    """
+    Renders the project/bible management panel.
+    Returns the active LocalizationBible, or None if no project is active.
+    """
+    st.subheader("📖 Localization Bible")
+    st.caption("Durable project memory. Edit between batches — frozen during a batch run.")
+
+    existing = LocalizationBible.list_projects()
+    mode = st.radio(
+        "Project",
+        ["Load existing", "New project"],
+        horizontal=True,
+        key="bible_mode"
+    )
+
+    bible: Optional[LocalizationBible] = None
+
+    if mode == "New project":
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            new_id = st.text_input("Project ID", placeholder="bad_bird", key="new_project_id")
+        with col2:
+            src_lang = st.selectbox("Source language", ["zh", "en", "fr", "ja", "ko"], key="new_src_lang")
+        with col3:
+            tgt_lang = st.selectbox("Target language", ["de", "en", "fr", "ja", "es", "it", "pt"], key="new_tgt_lang")
+
+        if new_id:
+            if LocalizationBible.exists(new_id):
+                st.warning(f"Project '{new_id}' already exists — loading it instead.")
+                bible = LocalizationBible.load(new_id)
+            else:
+                bible = LocalizationBible(new_id, src_lang, tgt_lang)
+
+    else:
+        if not existing:
+            st.info("No saved projects yet. Create one above.")
+            return None
+        project_id = st.selectbox("Select project", existing, key="bible_select")
+        bible = LocalizationBible.load(project_id)
+
+    if bible is None:
+        return None
+
+    st.divider()
+
+    # Phrase locks editor
+    col1, col2 = st.columns(2)
+    with col1:
+        phrase_raw = st.text_area(
+            "Phrase Locks  (source → target)",
+            value=_locks_to_text(bible.phrase_locks),
+            height=130,
+            key="bible_phrase_locks",
+            placeholder="另一場生命 → ein anderes Leben"
+        )
+    with col2:
+        voice_raw = st.text_area(
+            "Character Voices  (name: description)",
+            value=_voices_to_text(bible.character_voices),
+            height=130,
+            key="bible_char_voices",
+            placeholder="Hong: provocative, sharp, self-destructive\nQing: restrained, introspective"
+        )
+
+    # Director notes
+    notes_raw = st.text_area(
+        "Director Notes  (key: note)",
+        value="\n".join(f"{k}: {v}" for k, v in bible.director_notes.items()),
+        height=80,
+        key="bible_director_notes",
+        placeholder="overall_tone: arthouse, restrained\nfestival: Berlin IFF 2026"
+    )
+
+    # Apply edits to bible object
+    bible.phrase_locks = _parse_phrase_locks(phrase_raw)
+    bible.character_voices = _parse_character_voices(voice_raw)
+    bible.director_notes = _parse_character_voices(notes_raw)  # same key:value format
+
+    # Save controls
+    save_col, info_col = st.columns([1, 3])
+    with save_col:
+        if st.button("💾 Save Bible", use_container_width=True):
+            path = bible.save()
+            st.success(f"Saved: `{os.path.basename(path)}`")
+            st.session_state["bible_saved"] = True
+    with info_col:
+        if bible.updated_at:
+            st.caption(f"Last saved: {bible.updated_at}")
+        locks_n = len(bible.phrase_locks)
+        voices_n = len(bible.character_voices)
+        st.caption(f"{locks_n} phrase lock{'s' if locks_n != 1 else ''}  ·  {voices_n} character voice{'s' if voices_n != 1 else ''}")
+
+    return bible
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -80,20 +188,34 @@ def display_localization_ui():
     llm_label = "Claude (Anthropic)" if ANTHROPIC_AVAILABLE else "GPT-4o-mini (OpenAI)"
     st.success(f"LLM: {llm_label}")
 
+    # ─── Localization Bible (Layer 1 — Creative Direction) ───────────────────
+    with st.expander("📖 Localization Bible", expanded=True):
+        bible = _render_bible_panel()
+
+    if bible is None:
+        st.info("Create or load a project bible to begin.")
+        return
+
+    # Derive language defaults from bible
+    default_src = bible.source_language
+    default_tgt = bible.target_language.upper()
+
     # ─── Pipeline Settings ───────────────────────────────────────────────────
-    with st.expander("⚙️ Pipeline Settings", expanded=True):
+    with st.expander("⚙️ Pipeline Settings", expanded=False):
+        src_options = ["zh", "en", "fr", "ja", "ko", "it", "es"]
+        tgt_options = ["DE", "EN", "FR", "JA", "ES", "IT", "PT", "KO", "ZH"]
         col1, col2, col3 = st.columns(3)
         with col1:
             source_lang = st.selectbox(
                 "Source Language",
-                ["zh", "en", "fr", "ja", "ko", "it", "es"],
-                index=0
+                src_options,
+                index=src_options.index(default_src) if default_src in src_options else 0
             )
         with col2:
             target_lang = st.selectbox(
                 "Target Language",
-                ["DE", "EN", "FR", "JA", "ES", "IT", "PT", "KO", "ZH"],
-                index=0
+                tgt_options,
+                index=tgt_options.index(default_tgt) if default_tgt in tgt_options else 0
             )
         with col3:
             mode = st.selectbox(
@@ -123,31 +245,6 @@ def display_localization_ui():
             "character": scene_character or "unspecified",
             "relationship": scene_relationship or "unspecified",
         }
-
-    # ─── Memory / Consistency Rules ──────────────────────────────────────────
-    with st.expander("🧠 Memory / Consistency Rules", expanded=False):
-        st.caption("These rules persist across the entire batch — preventing tone drift.")
-        col1, col2 = st.columns(2)
-        with col1:
-            phrase_lock_raw = st.text_area(
-                "Phrase Locks  (source → target)",
-                value=st.session_state.get("phrase_lock_raw", ""),
-                placeholder="另一場生命 → ein anderes Leben\n一個人 → allein",
-                height=120,
-                key="phrase_lock_input"
-            )
-        with col2:
-            char_voice_raw = st.text_area(
-                "Character Voices  (name: description)",
-                value=st.session_state.get("char_voice_raw", ""),
-                placeholder="Hong: provocative, sharp, self-destructive\nQing: restrained, introspective",
-                height=120,
-                key="char_voice_input"
-            )
-        if phrase_lock_raw:
-            st.session_state["phrase_lock_raw"] = phrase_lock_raw
-        if char_voice_raw:
-            st.session_state["char_voice_raw"] = char_voice_raw
 
     # ─── Input ───────────────────────────────────────────────────────────────
     st.subheader("📥 Input")
@@ -205,7 +302,8 @@ def display_localization_ui():
                                 help="Track emotional arc across the batch")
 
     if run_clicked:
-        memory = _build_memory_from_form(phrase_lock_raw, char_voice_raw)
+        # Extract frozen memory snapshot from bible — bible is not mutated during the run
+        memory = bible.to_memory()
         track_arc = st.session_state.get("track_arc", False)
         orchestrator = LocalizationOrchestrator(memory=memory, track_arc=track_arc)
 

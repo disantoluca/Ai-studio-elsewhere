@@ -113,6 +113,118 @@ class LocalizationMemory:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Localization Bible — durable project-level memory
+# ─────────────────────────────────────────────────────────────────────────────
+
+from datetime import datetime as _dt
+
+BIBLE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "localization")
+
+
+class LocalizationBible:
+    """
+    Durable localization bible — one file per film project.
+
+    Rule: may be edited between batches, frozen during a batch run.
+    The memory layer (LocalizationMemory) is extracted from the bible
+    before each batch and passed to the orchestrator read-only.
+    """
+
+    VERSION = 1
+
+    def __init__(
+        self,
+        project_id: str,
+        source_language: str = "zh",
+        target_language: str = "de",
+    ):
+        self.project_id = project_id
+        self.source_language = source_language
+        self.target_language = target_language
+        self.phrase_locks: Dict[str, str] = {}
+        self.character_voices: Dict[str, str] = {}
+        self.style_rules: Dict[str, object] = {
+            "avoid_literal": True,
+            "prefer_short_lines": True,
+            "cinematic_tone": True,
+        }
+        self.director_notes: Dict[str, str] = {}
+        self.version: int = self.VERSION
+        self.updated_at: str = ""
+
+    # ── Serialization ────────────────────────────────────────────────────────
+
+    def to_dict(self) -> Dict:
+        return {
+            "project_id": self.project_id,
+            "source_language": self.source_language,
+            "target_language": self.target_language,
+            "phrase_locks": self.phrase_locks,
+            "character_voices": self.character_voices,
+            "style_rules": self.style_rules,
+            "director_notes": self.director_notes,
+            "version": self.version,
+            "updated_at": self.updated_at,
+        }
+
+    def from_dict(self, d: Dict) -> "LocalizationBible":
+        self.project_id = d.get("project_id", self.project_id)
+        self.source_language = d.get("source_language", self.source_language)
+        self.target_language = d.get("target_language", self.target_language)
+        self.phrase_locks = d.get("phrase_locks", {})
+        self.character_voices = d.get("character_voices", {})
+        self.style_rules = {**self.style_rules, **d.get("style_rules", {})}
+        self.director_notes = d.get("director_notes", {})
+        self.version = d.get("version", self.VERSION)
+        self.updated_at = d.get("updated_at", "")
+        return self
+
+    # ── Persistence ──────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _path(project_id: str) -> str:
+        os.makedirs(BIBLE_DIR, exist_ok=True)
+        return os.path.join(BIBLE_DIR, f"{project_id}.json")
+
+    def save(self) -> str:
+        self.updated_at = _dt.now().isoformat(timespec="seconds")
+        path = self._path(self.project_id)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(self.to_dict(), f, ensure_ascii=False, indent=2)
+        return path
+
+    @classmethod
+    def load(cls, project_id: str) -> "LocalizationBible":
+        bible = cls(project_id)
+        path = cls._path(project_id)
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                bible.from_dict(json.load(f))
+        return bible
+
+    @classmethod
+    def list_projects(cls) -> List[str]:
+        os.makedirs(BIBLE_DIR, exist_ok=True)
+        return sorted(
+            f[:-5] for f in os.listdir(BIBLE_DIR) if f.endswith(".json")
+        )
+
+    @classmethod
+    def exists(cls, project_id: str) -> bool:
+        return os.path.exists(cls._path(project_id))
+
+    # ── Memory extraction ────────────────────────────────────────────────────
+
+    def to_memory(self) -> LocalizationMemory:
+        """Extract a frozen LocalizationMemory snapshot for pipeline use."""
+        mem = LocalizationMemory()
+        mem.phrase_lock = dict(self.phrase_locks)
+        mem.character_voice = dict(self.character_voices)
+        mem.style_rules = dict(self.style_rules)
+        return mem
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Tone Inference — rule-based pre-LLM step
 # ─────────────────────────────────────────────────────────────────────────────
 
