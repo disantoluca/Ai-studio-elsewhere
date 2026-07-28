@@ -25,6 +25,9 @@ try:
         SegmentationAgent,
         OutputAgent,
         SubtitleSegment,
+        ProjectContext,
+        SceneContext,
+        SegmentContext,
         ANTHROPIC_AVAILABLE,
         OPENAI_AVAILABLE,
     )
@@ -230,21 +233,68 @@ def display_localization_ui():
                 )
             )
 
-    # ─── Scene Context ───────────────────────────────────────────────────────
+    # ─── Layer 1: Project Context (persistent — from bible) ──────────────────
+    with st.expander("🎥 Project Context", expanded=False):
+        st.caption("Persistent film-level context — saved in the bible. Shapes register and style for every segment.")
+        pc = bible.project_context
+        col1, col2 = st.columns(2)
+        with col1:
+            pc.genre = st.text_input("Genre", value=pc.genre,
+                                      placeholder="arthouse / thriller / drama / comedy")
+            pc.overall_style = st.text_input("Overall Style", value=pc.overall_style,
+                                              placeholder="restrained / visceral / poetic / naturalistic")
+            pc.register = st.text_input("Register", value=pc.register,
+                                         placeholder="formal / colloquial / literary / raw")
+        with col2:
+            pc.festival_profile = st.text_input("Festival Profile", value=pc.festival_profile,
+                                                  placeholder="Berlin / Cannes / Sundance / streaming / none")
+            pc.forbidden_patterns = st.text_input("Avoid", value=pc.forbidden_patterns,
+                                                    placeholder="idioms, exclamation marks, over-explanation")
+        if not pc.is_empty():
+            st.caption(f"_Active: {pc.to_prompt_block().replace(chr(10), '  ·  ')}_")
+
+    # ─── Layer 1: Scene Context (per batch) ──────────────────────────────────
     with st.expander("🎬 Scene Context", expanded=False):
+        st.caption("Set per batch. Shapes tone selection for this scene — not stored between sessions.")
         col1, col2, col3 = st.columns(3)
         with col1:
-            scene_mood = st.text_input("Scene Mood", placeholder="intimate / confrontational / ironic")
+            sc_mood = st.text_input("Mood", placeholder="intimate / confrontational / ironic")
+            sc_purpose = st.text_input("Narrative Purpose",
+                                        placeholder="confrontation / revelation / transition")
         with col2:
-            scene_character = st.text_input("Active Character", placeholder="Hong")
+            sc_char = st.text_input("Active Character", placeholder="Hong")
+            sc_rel = st.text_input("Relationship", placeholder="estranged lovers / rivals")
         with col3:
-            scene_relationship = st.text_input("Relationship", placeholder="estranged lovers")
+            sc_prev = st.text_area("Previous Scene", placeholder="Brief summary of what just happened",
+                                    height=68)
+            sc_next = st.text_area("Next Scene", placeholder="Brief summary of what comes next",
+                                    height=68)
+        scene_ctx = SceneContext(
+            mood=sc_mood,
+            narrative_purpose=sc_purpose,
+            character=sc_char,
+            relationship_dynamics=sc_rel,
+            previous_scene_summary=sc_prev,
+            next_scene_summary=sc_next,
+        )
 
-        scene_context = {
-            "mood": scene_mood or "unspecified",
-            "character": scene_character or "unspecified",
-            "relationship": scene_relationship or "unspecified",
-        }
+    # ─── Layer 1: Segment Context (optional, per batch) ──────────────────────
+    with st.expander("🎙 Segment Context  _(optional)_", expanded=False):
+        st.caption("Most granular tier. Leave empty if not applicable — the pipeline handles it gracefully.")
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            sg_speaker = st.text_input("Speaker", placeholder="Hong")
+        with col2:
+            sg_emotion = st.text_input("Emotional State",
+                                        placeholder="detached / euphoric / frightened")
+        with col3:
+            sg_action = st.text_input("Immediate Action",
+                                       placeholder="walks away / looks at mirror / holds breath")
+        segment_ctx = SegmentContext(
+            speaker=sg_speaker,
+            emotional_state=sg_emotion,
+            immediate_action=sg_action,
+        )
 
     # ─── Input ───────────────────────────────────────────────────────────────
     st.subheader("📥 Input")
@@ -324,7 +374,9 @@ def display_localization_ui():
                 batch,
                 target_lang=target_lang,
                 translation_mode=mode,
-                scene_context=scene_context,
+                project_ctx=bible.project_context if not bible.project_context.is_empty() else None,
+                scene_ctx=scene_ctx if not scene_ctx.is_empty() else None,
+                segment_ctx=segment_ctx if not segment_ctx.is_empty() else None,
                 progress_callback=on_progress,
             )
 

@@ -42,6 +42,132 @@ class SubtitleSegment:
     language: str = "zh"
 
 
+# ─── Three-tier context ────────────────────────────────────────────────────
+
+@dataclass
+class ProjectContext:
+    """
+    Persistent, film-level context. Stored in the bible.
+    Feeds TranslationAgent — shapes register, style, and festival constraints
+    for every segment in the film.
+    """
+    genre: str = ""                  # arthouse / thriller / drama / comedy
+    overall_style: str = ""          # restrained / visceral / poetic / naturalistic
+    festival_profile: str = ""       # Berlin / Cannes / Sundance / streaming / none
+    register: str = ""               # formal / colloquial / literary / raw
+    forbidden_patterns: str = ""     # e.g. "avoid idioms, avoid exclamation marks"
+
+    def is_empty(self) -> bool:
+        return not any([self.genre, self.overall_style, self.festival_profile,
+                        self.register, self.forbidden_patterns])
+
+    def to_prompt_block(self) -> str:
+        if self.is_empty():
+            return ""
+        parts = []
+        if self.genre:
+            parts.append(f"Genre: {self.genre}")
+        if self.overall_style:
+            parts.append(f"Style: {self.overall_style}")
+        if self.festival_profile:
+            parts.append(f"Festival profile: {self.festival_profile}")
+        if self.register:
+            parts.append(f"Register: {self.register}")
+        if self.forbidden_patterns:
+            parts.append(f"Avoid: {self.forbidden_patterns}")
+        return "Project context:\n" + "\n".join(f"  {p}" for p in parts)
+
+    def to_dict(self) -> Dict:
+        return {
+            "genre": self.genre,
+            "overall_style": self.overall_style,
+            "festival_profile": self.festival_profile,
+            "register": self.register,
+            "forbidden_patterns": self.forbidden_patterns,
+        }
+
+    @classmethod
+    def from_dict(cls, d: Dict) -> "ProjectContext":
+        return cls(
+            genre=d.get("genre", ""),
+            overall_style=d.get("overall_style", ""),
+            festival_profile=d.get("festival_profile", ""),
+            register=d.get("register", ""),
+            forbidden_patterns=d.get("forbidden_patterns", ""),
+        )
+
+
+@dataclass
+class SceneContext:
+    """
+    Per-batch context. Set by the director before running a scene.
+    Feeds ToneCalibrationAgent — shapes candidate selection for this scene.
+    """
+    mood: str = ""                   # intimate / confrontational / ironic / tender
+    narrative_purpose: str = ""      # confrontation / revelation / transition / intimacy
+    relationship_dynamics: str = ""  # estranged lovers / rivals / strangers
+    character: str = ""              # active speaker
+    previous_scene_summary: str = "" # optional — prevents tonal whiplash
+    next_scene_summary: str = ""     # optional — informs where the scene is going
+
+    def is_empty(self) -> bool:
+        return not any([self.mood, self.narrative_purpose, self.relationship_dynamics,
+                        self.character, self.previous_scene_summary, self.next_scene_summary])
+
+    def to_prompt_block(self) -> str:
+        if self.is_empty():
+            return ""
+        parts = []
+        if self.mood:
+            parts.append(f"Mood: {self.mood}")
+        if self.narrative_purpose:
+            parts.append(f"Narrative purpose: {self.narrative_purpose}")
+        if self.relationship_dynamics:
+            parts.append(f"Relationship: {self.relationship_dynamics}")
+        if self.character:
+            parts.append(f"Speaker: {self.character}")
+        if self.previous_scene_summary:
+            parts.append(f"Previous scene: {self.previous_scene_summary}")
+        if self.next_scene_summary:
+            parts.append(f"Next scene: {self.next_scene_summary}")
+        return "Scene context:\n" + "\n".join(f"  {p}" for p in parts)
+
+    def to_legacy_dict(self) -> Dict:
+        """Backward-compat dict used by infer_tone() and score_candidates()."""
+        return {
+            "mood": self.mood,
+            "character": self.character,
+            "relationship": self.relationship_dynamics,
+        }
+
+
+@dataclass
+class SegmentContext:
+    """
+    Optional per-batch segment-level context. Most granular tier.
+    Feeds both TranslationAgent and ToneCalibrationAgent.
+    Directors can leave this empty; the pipeline handles it gracefully.
+    """
+    speaker: str = ""                # character speaking this line
+    emotional_state: str = ""        # angry / fearful / detached / euphoric
+    immediate_action: str = ""       # physical action during this line
+
+    def is_empty(self) -> bool:
+        return not any([self.speaker, self.emotional_state, self.immediate_action])
+
+    def to_prompt_block(self) -> str:
+        if self.is_empty():
+            return ""
+        parts = []
+        if self.speaker:
+            parts.append(f"Speaker: {self.speaker}")
+        if self.emotional_state:
+            parts.append(f"Emotional state: {self.emotional_state}")
+        if self.immediate_action:
+            parts.append(f"Action: {self.immediate_action}")
+        return "Segment context:\n" + "\n".join(f"  {p}" for p in parts)
+
+
 @dataclass
 class TranslationCandidate:
     text: str
@@ -141,6 +267,7 @@ class LocalizationBible:
         self.project_id = project_id
         self.source_language = source_language
         self.target_language = target_language
+        self.project_context: ProjectContext = ProjectContext()
         self.phrase_locks: Dict[str, str] = {}
         self.character_voices: Dict[str, str] = {}
         self.style_rules: Dict[str, object] = {
@@ -159,6 +286,7 @@ class LocalizationBible:
             "project_id": self.project_id,
             "source_language": self.source_language,
             "target_language": self.target_language,
+            "project_context": self.project_context.to_dict(),
             "phrase_locks": self.phrase_locks,
             "character_voices": self.character_voices,
             "style_rules": self.style_rules,
@@ -171,6 +299,7 @@ class LocalizationBible:
         self.project_id = d.get("project_id", self.project_id)
         self.source_language = d.get("source_language", self.source_language)
         self.target_language = d.get("target_language", self.target_language)
+        self.project_context = ProjectContext.from_dict(d.get("project_context", {}))
         self.phrase_locks = d.get("phrase_locks", {})
         self.character_voices = d.get("character_voices", {})
         self.style_rules = {**self.style_rules, **d.get("style_rules", {})}
@@ -598,13 +727,19 @@ class TranslationAgent:
         segment: SubtitleSegment,
         target_lang: str,
         mode: str,
-        context_window: str = ""
+        context_window: str = "",
+        project_ctx: Optional[ProjectContext] = None,
+        segment_ctx: Optional[SegmentContext] = None,
     ) -> List[TranslationCandidate]:
         user = (
             f"Source ({segment.language.upper()}): {segment.source_text}\n"
             f"Target language: {target_lang}\n"
             f"Mode: {mode}\n"
         )
+        if project_ctx and not project_ctx.is_empty():
+            user += f"\n{project_ctx.to_prompt_block()}\n"
+        if segment_ctx and not segment_ctx.is_empty():
+            user += f"\n{segment_ctx.to_prompt_block()}\n"
         if context_window:
             user += f"\nSurrounding lines (for context only — translate only the marked line →):\n{context_window}\n"
         user += (
@@ -654,25 +789,33 @@ class ToneCalibrationAgent:
         self,
         segment: SubtitleSegment,
         candidates: List[TranslationCandidate],
-        scene_context: Optional[Dict],
-        memory: Optional["LocalizationMemory"] = None
+        scene_ctx: Optional[SceneContext],
+        memory: Optional["LocalizationMemory"] = None,
+        segment_ctx: Optional[SegmentContext] = None,
     ) -> Tuple[str, str, str, float]:
         """
         Returns (selected_text, tone_tag, rationale, confidence_0_to_1).
         inferred_tone from rule-based step is passed to the LLM as a hypothesis.
         """
-        ctx = scene_context or {}
-        char = ctx.get("character", "unspecified")
+        # Resolve speaker: segment_ctx.speaker overrides scene_ctx.character
+        char = ""
+        if segment_ctx and segment_ctx.speaker:
+            char = segment_ctx.speaker
+        elif scene_ctx and scene_ctx.character:
+            char = scene_ctx.character
 
-        # Pre-LLM: rule-based tone inference
-        inferred = infer_tone(segment, scene_context, memory)
+        # Pre-LLM: rule-based tone inference using legacy dict format
+        legacy_dict = scene_ctx.to_legacy_dict() if scene_ctx else {}
+        if char:
+            legacy_dict["character"] = char
+        inferred = infer_tone(segment, legacy_dict, memory)
 
         # Pre-LLM: score candidates against inferred tone
         char_voice = (memory.character_voice.get(char, "") if memory else "")
         scores = score_candidates(candidates, inferred, char_voice)
 
         char_voice_note = ""
-        if memory and char in memory.character_voice:
+        if memory and char and char in memory.character_voice:
             char_voice_note = f"\nCharacter voice for '{char}': {memory.character_voice[char]}"
 
         user = (
@@ -683,9 +826,12 @@ class ToneCalibrationAgent:
                 for i, c in enumerate(candidates)
             ) +
             f"\n\nPre-analysis suggests tone: {inferred}"
-            f"\nScene mood: {ctx.get('mood', 'unspecified')}"
-            f"\nCharacter: {char}"
-            f"\nRelationship: {ctx.get('relationship', 'unspecified')}"
+        )
+        if scene_ctx and not scene_ctx.is_empty():
+            user += f"\n\n{scene_ctx.to_prompt_block()}"
+        if segment_ctx and not segment_ctx.is_empty():
+            user += f"\n\n{segment_ctx.to_prompt_block()}"
+        user += (
             f"{char_voice_note}"
             f"\n\nTone options: {', '.join(self.TONE_OPTIONS)}"
             '\n\nReturn JSON: '
@@ -964,12 +1110,18 @@ class LocalizationOrchestrator:
         segments: List[SubtitleSegment],
         target_lang: str = "DE",
         translation_mode: str = "cinematic",
-        scene_context: Optional[Dict] = None,
+        project_ctx: Optional[ProjectContext] = None,
+        scene_ctx: Optional[SceneContext] = None,
+        segment_ctx: Optional[SegmentContext] = None,
         progress_callback=None
     ) -> List[LocalizationResult]:
         """
         Process a batch through all pipeline stages.
-        progress_callback(current_int, total_int, LocalizationResult) is called after each segment.
+
+        Context routing:
+          project_ctx  → TranslationAgent      (register, style, festival)
+          scene_ctx    → ToneCalibrationAgent  (mood, relationships, purpose)
+          segment_ctx  → both agents           (speaker, emotional state, action)
         """
         if self.arc:
             self.arc.reset()
@@ -985,34 +1137,39 @@ class LocalizationOrchestrator:
                 source_text=seg.source_text,
             )
 
-            # Stage 2: Translation — 3 candidates with context window
+            # Stage 2: Translation — project_ctx + segment_ctx shape register/style
             ctx_window = self._context_window(segments, i)
             result.candidates = self.translation.translate(
-                seg, target_lang, translation_mode, ctx_window
+                seg, target_lang, translation_mode, ctx_window,
+                project_ctx=project_ctx,
+                segment_ctx=segment_ctx,
             )
 
-            # Stage 3: Tone calibration — infer_tone → score_candidates → LLM director
+            # Stage 3: Tone calibration — scene_ctx + segment_ctx shape selection
             (result.selected, result.selected_tone,
              result.tone_rationale, result.tone_confidence) = self.tone.calibrate(
-                seg, result.candidates, scene_context, self.memory
+                seg, result.candidates,
+                scene_ctx=scene_ctx,
+                memory=self.memory,
+                segment_ctx=segment_ctx,
             )
-            result.inferred_tone = infer_tone(seg, scene_context, self.memory)
+            legacy = scene_ctx.to_legacy_dict() if scene_ctx else {}
+            if segment_ctx and segment_ctx.speaker:
+                legacy["character"] = segment_ctx.speaker
+            result.inferred_tone = infer_tone(seg, legacy, self.memory)
             result.candidate_scores = score_candidates(
                 result.candidates, result.selected_tone,
-                self.memory.character_voice.get(
-                    (scene_context or {}).get("character", ""), ""
-                ) if self.memory else ""
+                self.memory.character_voice.get(legacy.get("character", ""), "") if self.memory else ""
             )
 
-            # Stage 4: Consistency — apply memory (phrase locks, character voice)
+            # Stage 4: Consistency
             result.final, result.consistency_changes = self.consistency.apply(result, self.memory)
 
-            # Stage 5: QA — validate, then loop if flagged
+            # Stage 5: QA — validate, loop if flagged
             result.qa_status, result.qa_issues, result.qa_suggestion = self.qa.check(result)
             if result.qa_status == "revise":
                 result = self._qa_revision_loop(result)
 
-            # Arc tracking
             if self.arc:
                 self.arc.record(result.id, result.selected_tone)
 
@@ -1024,7 +1181,6 @@ class LocalizationOrchestrator:
         return results
 
     def arc_summary(self) -> Optional[Dict]:
-        """Return emotional arc summary if tracking was enabled."""
         return self.arc.summary() if self.arc else None
 
     def process_srt(self, srt_text: str, language: str = "zh", **kwargs) -> List[LocalizationResult]:
