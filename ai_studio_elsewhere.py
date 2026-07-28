@@ -38,6 +38,12 @@ try:
 except ImportError:
     LOCALIZATION_AVAILABLE = False
 
+try:
+    from cinematic_evaluation_ui import display_evaluation_ui
+    EVALUATION_AVAILABLE = True
+except ImportError:
+    EVALUATION_AVAILABLE = False
+
 # Demo project
 try:
     from demo_project import load_demo_project
@@ -1462,7 +1468,7 @@ st.sidebar.code(
 # Main Navigation
 # ===========================================
 
-tab_home, tab_new_project, tab_script, tab_scenes, tab_concepts, tab_video, tab_characters, tab_storyboard, tab_locations, tab_exports, tab_localization = st.tabs([
+tab_home, tab_new_project, tab_script, tab_scenes, tab_concepts, tab_video, tab_characters, tab_storyboard, tab_locations, tab_exports, tab_localization, tab_evaluation = st.tabs([
     "🏠 Home",
     "📝 New Project",
     "📄 Script Upload",
@@ -1473,7 +1479,8 @@ tab_home, tab_new_project, tab_script, tab_scenes, tab_concepts, tab_video, tab_
     "📋 Storyboard",
     "📍 Locations",
     "📦 Export",
-    "🌍 Localization Engine"
+    "🌍 Localization Engine",
+    "🔬 Evaluation"
 ])
 
 # ===========================================
@@ -2602,6 +2609,12 @@ with tab_localization:
     else:
         st.error("Cinematic Localization module not available.")
         st.code("pip install anthropic", language="bash")
+
+with tab_evaluation:
+    if EVALUATION_AVAILABLE:
+        display_evaluation_ui()
+    else:
+        st.error("Evaluation module not available.")
 
 # ===========================================
 # Footer
