@@ -32,6 +32,12 @@ from typing import Dict, List, Optional, Any, Tuple
 from storyboard_ui import display_storyboard_ui
 from storyboard_pdf_ui import display_pdf_export_ui, create_pdf_export_settings
 
+try:
+    from cinematic_localization_ui import display_localization_ui
+    LOCALIZATION_AVAILABLE = True
+except ImportError:
+    LOCALIZATION_AVAILABLE = False
+
 # Demo project
 try:
     from demo_project import load_demo_project
@@ -1456,7 +1462,7 @@ st.sidebar.code(
 # Main Navigation
 # ===========================================
 
-tab_home, tab_new_project, tab_script, tab_scenes, tab_concepts, tab_video, tab_characters, tab_storyboard, tab_locations, tab_exports = st.tabs([
+tab_home, tab_new_project, tab_script, tab_scenes, tab_concepts, tab_video, tab_characters, tab_storyboard, tab_locations, tab_exports, tab_localization = st.tabs([
     "🏠 Home",
     "📝 New Project",
     "📄 Script Upload",
@@ -1466,7 +1472,8 @@ tab_home, tab_new_project, tab_script, tab_scenes, tab_concepts, tab_video, tab_
     "🎭 Characters",
     "📋 Storyboard",
     "📍 Locations",
-    "📦 Export"
+    "📦 Export",
+    "🌍 Localization Engine"
 ])
 
 # ===========================================
@@ -2584,6 +2591,17 @@ with tab_exports:
         if st.button("📥 Prepare Exports", type="primary", use_container_width=True):
             st.info("📦 Preparing export package...")
             st.success("✅ Ready for download (coming soon)")
+
+# ===========================================
+# Tab: Localization
+# ===========================================
+
+with tab_localization:
+    if LOCALIZATION_AVAILABLE:
+        display_localization_ui()
+    else:
+        st.error("Cinematic Localization module not available.")
+        st.code("pip install anthropic", language="bash")
 
 # ===========================================
 # Footer

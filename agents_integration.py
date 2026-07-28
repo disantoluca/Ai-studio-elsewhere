@@ -416,7 +416,33 @@ def get_agent_status() -> Dict:
         "video_translator": get_video_translator_agent() is not None,
         "location_scraper": get_location_scraper() is not None,
         "image_processor": get_image_processor() is not None,
+        "cinematic_localization": get_cinematic_localization_agent() is not None,
     }
+
+# ============================================================
+# 10. CINEMATIC LOCALIZATION AGENT
+# ============================================================
+
+_localization_orchestrator = None
+
+def load_cinematic_localization_agent():
+    """Load cinematic localization orchestrator"""
+    try:
+        from cinematic_localization_agent import LocalizationOrchestrator
+        print("✅ Cinematic Localization Agent loaded")
+        return LocalizationOrchestrator()
+    except ImportError as e:
+        print(f"⚠️  Cinematic Localization Agent failed to load: {e}")
+        return None
+    except Exception as e:
+        print(f"⚠️  Cinematic Localization Agent error: {e}")
+        return None
+
+def get_cinematic_localization_agent():
+    global _localization_orchestrator
+    if _localization_orchestrator is None:
+        _localization_orchestrator = load_cinematic_localization_agent()
+    return _localization_orchestrator
 
 print("🎬 Agent Integration Layer Ready!")
 print("=" * 60)
