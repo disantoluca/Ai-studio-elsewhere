@@ -1,0 +1,1137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cinematic Localization Engine — AI Studio Elsewhere Papers · No. 1</title>
+<style>
+
+  /* ── Typography ─────────────────────────────────────────────────────── */
+
+  @import url('https://fonts.googleapis.com/css2?family=IM+Fell+English:ital@0;1&family=IM+Fell+English+SC&display=swap');
+
+  :root {
+    --black:   #111111;
+    --grey:    #888888;
+    --light:   #e8e8e8;
+    --white:   #fafaf8;
+    --margin:  min(18vw, 160px);
+  }
+
+  * {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+  }
+
+  html {
+    background: var(--white);
+    color: var(--black);
+    font-family: 'IM Fell English', Georgia, 'Times New Roman', serif;
+    font-size: 18px;
+    line-height: 1.85;
+  }
+
+  body {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 0 var(--margin);
+  }
+
+  /* ── Cover ──────────────────────────────────────────────────────────── */
+
+  .cover {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    padding: 12vh 0 10vh;
+    border-bottom: 1px solid var(--light);
+    margin-bottom: 10vh;
+  }
+
+  .series {
+    font-size: 0.75rem;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--grey);
+    margin-bottom: 6vh;
+  }
+
+  .cover-title {
+    font-size: clamp(2rem, 5vw, 3.4rem);
+    line-height: 1.15;
+    font-weight: normal;
+    margin-bottom: 3vh;
+    font-style: italic;
+  }
+
+  .cover-subtitle {
+    font-size: 1rem;
+    color: var(--grey);
+    font-style: italic;
+    margin-bottom: 8vh;
+    max-width: 38em;
+    line-height: 1.6;
+  }
+
+  .cover-rule {
+    width: 48px;
+    height: 1px;
+    background: var(--black);
+    margin-bottom: 4vh;
+  }
+
+  .cover-author {
+    font-size: 0.85rem;
+    letter-spacing: 0.08em;
+    color: var(--grey);
+  }
+
+  .cover-studio {
+    margin-top: 1rem;
+    font-size: 0.75rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--light);
+    color: #bbb;
+  }
+
+  /* ── Opening ────────────────────────────────────────────────────────── */
+
+  .opening {
+    padding: 8vh 0 10vh;
+    border-bottom: 1px solid var(--light);
+    margin-bottom: 10vh;
+  }
+
+  .opening p {
+    font-size: 1.35rem;
+    line-height: 2.1;
+    max-width: 30em;
+    font-style: italic;
+    margin-bottom: 1.4rem;
+  }
+
+  .opening p:last-child {
+    margin-bottom: 0;
+    font-style: normal;
+    font-size: 1rem;
+    color: var(--grey);
+    line-height: 1.7;
+    max-width: 38em;
+  }
+
+  /* ── Chapter ────────────────────────────────────────────────────────── */
+
+  .chapter {
+    padding: 8vh 0 10vh;
+    border-bottom: 1px solid var(--light);
+    margin-bottom: 10vh;
+  }
+
+  .chapter:last-of-type {
+    border-bottom: none;
+  }
+
+  .chapter-label {
+    font-size: 0.7rem;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--grey);
+    margin-bottom: 1.2rem;
+  }
+
+  .chapter-title {
+    font-size: clamp(1.5rem, 3vw, 2.2rem);
+    font-weight: normal;
+    line-height: 1.25;
+    margin-bottom: 5vh;
+    font-style: italic;
+  }
+
+  .chapter p {
+    max-width: 38em;
+    margin-bottom: 1.6rem;
+    font-size: 1rem;
+  }
+
+  .chapter p:last-child {
+    margin-bottom: 0;
+  }
+
+  /* ── Diagrams ───────────────────────────────────────────────────────── */
+
+  .diagram {
+    margin: 5vh 0;
+    padding: 3rem 2.5rem;
+    border-left: 2px solid var(--light);
+    font-family: 'Courier New', monospace;
+    font-size: 0.82rem;
+    color: var(--grey);
+    line-height: 2.2;
+    max-width: 36em;
+  }
+
+  .diagram-title {
+    font-family: 'IM Fell English', Georgia, serif;
+    font-size: 0.72rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: #bbb;
+    margin-bottom: 1.5rem;
+    font-style: normal;
+  }
+
+  /* ── Pull quote ─────────────────────────────────────────────────────── */
+
+  .pull {
+    margin: 5vh 0;
+    padding: 0 0 0 2rem;
+    border-left: 2px solid var(--black);
+    font-size: 1.2rem;
+    font-style: italic;
+    line-height: 1.7;
+    max-width: 28em;
+    color: var(--black);
+  }
+
+  /* ── Table ──────────────────────────────────────────────────────────── */
+
+  table {
+    border-collapse: collapse;
+    margin: 4vh 0;
+    font-size: 0.88rem;
+    max-width: 38em;
+  }
+
+  th {
+    text-align: left;
+    font-weight: normal;
+    font-style: italic;
+    padding: 0.4rem 2rem 0.4rem 0;
+    border-bottom: 1px solid var(--black);
+    color: var(--grey);
+    font-size: 0.75rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+  }
+
+  td {
+    padding: 0.7rem 2rem 0.7rem 0;
+    vertical-align: top;
+    border-bottom: 1px solid var(--light);
+  }
+
+  td:first-child {
+    font-style: italic;
+    white-space: nowrap;
+  }
+
+  /* ── Closing ────────────────────────────────────────────────────────── */
+
+  .closing {
+    padding: 8vh 0 6vh;
+    margin-bottom: 8vh;
+  }
+
+  .closing p {
+    max-width: 32em;
+    margin-bottom: 1.8rem;
+    font-size: 1.15rem;
+    line-height: 1.95;
+  }
+
+  .closing p.final {
+    font-style: italic;
+    font-size: 1.35rem;
+    line-height: 2.1;
+    max-width: 26em;
+    color: var(--black);
+  }
+
+  /* ── Colophon ───────────────────────────────────────────────────────── */
+
+  .colophon {
+    padding: 5vh 0;
+    border-top: 1px solid var(--light);
+    font-size: 0.72rem;
+    color: var(--grey);
+    line-height: 1.8;
+    letter-spacing: 0.03em;
+  }
+
+  .colophon p {
+    margin-bottom: 0.4rem;
+  }
+
+  /* ── Print ──────────────────────────────────────────────────────────── */
+
+  @media print {
+    :root { --margin: 60px; }
+    .cover { min-height: auto; padding: 5cm 0 4cm; page-break-after: always; }
+    .chapter { page-break-inside: avoid; }
+  }
+
+</style>
+</head>
+<body>
+
+<!-- ═══════════════════════════════════════════════════════════════════════ -->
+<!-- COVER                                                                  -->
+<!-- ═══════════════════════════════════════════════════════════════════════ -->
+
+<div class="cover">
+  <div class="series">AI Studio Elsewhere Papers &middot; No.&thinsp;1</div>
+
+  <h1 class="cover-title">
+    Cinematic Localization Engine
+  </h1>
+
+  <p class="cover-subtitle">
+    A Human-in-the-Loop Agent Architecture<br>
+    for Narrative Film Translation
+  </p>
+
+  <div class="cover-rule"></div>
+
+  <div class="cover-author">Luca D'Isanto</div>
+  <div class="cover-studio">AI Studio Elsewhere</div>
+</div>
+
+
+<!-- ═══════════════════════════════════════════════════════════════════════ -->
+<!-- OPENING                                                                -->
+<!-- ═══════════════════════════════════════════════════════════════════════ -->
+
+<div class="opening">
+  <p>Every film has a voice.</p>
+  <p>It lives somewhere between language and silence.</p>
+  <p>Traditional subtitle systems translate words.</p>
+  <p>Films ask us to translate intention.</p>
+  <p>
+    This document describes the architecture of a localization system
+    designed around that difference. It is written for filmmakers,
+    translators, festival programmers, and anyone who has ever
+    watched a film in a language they do not speak and understood
+    every word.
+  </p>
+</div>
+
+
+<!-- ═══════════════════════════════════════════════════════════════════════ -->
+<!-- CHAPTER 1                                                              -->
+<!-- ═══════════════════════════════════════════════════════════════════════ -->
+
+<div class="chapter">
+  <div class="chapter-label">Chapter One</div>
+  <h2 class="chapter-title">Why Translation Is Not Localization</h2>
+
+  <p>
+    In 1962, Michelangelo Antonioni released <em>L'Eclisse</em>. The film
+    ends with eight minutes of footage in which neither of the two main
+    characters appears. Streets, a streetlamp, a bus stop, water, bark.
+    Silence. The last shot fades to black. There is no dialogue to
+    translate. And yet that ending communicates something no subtitle
+    can transcribe.
+  </p>
+
+  <p>
+    Film is a medium in which language is never the whole message.
+    A line of dialogue carries meaning in at least four directions
+    simultaneously: what the words say, what they conceal, how they
+    are delivered, and what precedes and follows them in the scene.
+    Translation addresses the first. Localization must address all four.
+  </p>
+
+  <p>
+    Consider a simple example. A character says: <em>可我覺得賤。</em>
+    Word for word, this is: <em>But I feel cheap.</em>
+    A translation tool returns: <em>But I feel cheap.</em>
+    It is not wrong. It is also not the line.
+  </p>
+
+  <p>
+    The character speaking is a woman in the middle of a scene of
+    bitter self-awareness. She has just described something she did.
+    She is not asking for sympathy. She is stating a verdict about herself
+    with the precision of someone who has thought about it for a long time.
+    The German word <em>schäbig</em> — worn, shabby, mean — carries a weight
+    that <em>billig</em> (cheap) or <em>wertlos</em> (worthless) do not.
+    It sounds like what it means. It feels like judgment.
+  </p>
+
+  <p>
+    That difference is not linguistic. It is directorial.
+  </p>
+
+  <p>
+    Dialogue in film is not speech. It is constructed sound.
+    A screenwriter chooses each word for its rhythm as much as its meaning.
+    <em>I feel schäbig</em> has a different weight in the body than
+    <em>I feel worthless</em>. Subtitle readers hear the original language
+    and read the translation simultaneously, and the two must align at the
+    level of feeling — not vocabulary.
+  </p>
+
+  <p>
+    Then there is silence. In Wong Kar-wai's cinema, what characters
+    do not say defines the scene as much as what they speak aloud.
+    A character who asks a question and receives no answer communicates
+    something that a translated non-answer must preserve — the rhythm
+    of the refusal, the length of the pause, the word that is chosen
+    to fill the space. There is no dictionary entry for that.
+  </p>
+
+  <p>
+    And there are recurring motifs. A phrase used once early in a film
+    and again near the end is not just repeated — it is transformed.
+    The second time, every connotation of the first usage accompanies it.
+    If the translation drifts between the two occurrences, the motif
+    dissolves. The audience feels a faint loss and cannot say why.
+  </p>
+
+  <div class="pull">
+    Translation converts language.<br>
+    Localization preserves voice.
+  </div>
+
+  <p>
+    The distinction is not philosophical. It is practical. It determines
+    every decision made downstream — about which word to choose, which
+    rhythm to maintain, which phrase to lock in place across the entire film.
+    A localization system built on translation assumptions will produce
+    correct output. It will not produce the right output.
+  </p>
+</div>
+
+
+<!-- ═══════════════════════════════════════════════════════════════════════ -->
+<!-- CHAPTER 2                                                              -->
+<!-- ═══════════════════════════════════════════════════════════════════════ -->
+
+<div class="chapter">
+  <div class="chapter-label">Chapter Two</div>
+  <h2 class="chapter-title">The Director Remains the Author</h2>
+
+  <p>
+    Before describing how the system works, it is worth describing
+    what the system does not do.
+  </p>
+
+  <p>
+    The Cinematic Localization Engine does not decide the tone of the film.
+    It does not choose which words are important. It does not determine
+    how a character should sound. It does not have opinions about the
+    relationship between silence and text.
+  </p>
+
+  <p>
+    The director does.
+  </p>
+
+  <p>
+    This is not a technical constraint. It is a philosophical commitment.
+    Localization is an act of authorship. When a film crosses a language
+    boundary, something is inevitably lost in the crossing. The question
+    is not whether to lose something — that is unavoidable — but
+    <em>what to preserve at the cost of everything else</em>. That decision
+    belongs to the person who made the film.
+  </p>
+
+  <p>
+    The system's role is to execute that decision consistently,
+    at scale, without drift, and across every line of the film.
+    That is not a small contribution. A feature film can contain
+    twelve hundred subtitle events. Maintaining tonal coherence
+    across twelve hundred decisions — each made at a different
+    moment, often by different people, always under time pressure —
+    is precisely where human localization work has historically
+    failed. This is where a well-designed system helps.
+  </p>
+
+  <div class="pull">
+    The system never decides the artistic direction.<br>
+    The director writes the Bible.<br>
+    The system executes it faithfully.
+  </div>
+
+  <p>
+    This distinction — between deciding and executing — is the
+    architectural principle that determines every design choice in
+    the system. The director's voice is not an input to the process.
+    It is the process. Everything else is infrastructure built to
+    serve it.
+  </p>
+
+  <p>
+    In practice, this means the director interacts with the system
+    before any translation begins, establishing the rules that will
+    govern every subsequent decision. And it means the director
+    interacts again after the system has run, reviewing what was
+    produced and editing what does not serve the film.
+  </p>
+
+  <p>
+    Between those two moments, the system works alone. But it works
+    in the director's service, not in its own.
+  </p>
+</div>
+
+
+<!-- ═══════════════════════════════════════════════════════════════════════ -->
+<!-- CHAPTER 3                                                              -->
+<!-- ═══════════════════════════════════════════════════════════════════════ -->
+
+<div class="chapter">
+  <div class="chapter-label">Chapter Three</div>
+  <h2 class="chapter-title">The Localization Bible</h2>
+
+  <p>
+    Every film production keeps a continuity bible. It is the document
+    that the script supervisor maintains — the record of every detail
+    that must remain consistent across the shoot. Which hand the character
+    uses to hold the glass. Whether the window is open or closed.
+    The color of the coat she is wearing in a scene that will cut to
+    a scene shot three weeks later.
+  </p>
+
+  <p>
+    The Localization Bible is the same document, written for language.
+  </p>
+
+  <p>
+    It remembers how people speak. A character who uses short sentences,
+    declarative and unadorned, should not suddenly develop subordinate
+    clauses in the German version. A character whose speech is layered
+    and elliptical should arrive in the target language with the same
+    quality of indirection.
+  </p>
+
+  <p>
+    It remembers what they never say. In localization, omission is as
+    important as inclusion. Some phrases are deliberately avoided for
+    a character — not because they would be incorrect, but because
+    they would be wrong for this person. The Bible holds those decisions.
+  </p>
+
+  <p>
+    It remembers recurring phrases. When a phrase appears more than once
+    in a film, its translation is locked. The second occurrence carries
+    the memory of the first. Drift at the second occurrence breaks
+    the resonance the film has built.
+  </p>
+
+  <p>
+    And it carries the director's notes — the instructions that fall
+    outside any category: <em>this film is for Berlin, not streaming;
+    the register is literary, not colloquial; this character never
+    uses rhetorical questions.</em>
+  </p>
+
+  <div class="pull">
+    The Localization Bible is the film's memory.<br>
+    It does not change during production.<br>
+    It may be revised between projects.
+  </div>
+
+  <p>
+    One rule governs the Bible absolutely:
+    it is written before a batch of subtitles is processed,
+    and it is frozen during processing. The system reads from it
+    but never writes to it. A director may revise it between
+    batches — after reviewing what the system produced, after
+    identifying a drift that needs correcting. But while the
+    system is running, the Bible does not move.
+  </p>
+
+  <p>
+    This constraint exists for the same reason that film continuity
+    exists: the audience experiences a film as a single coherent work,
+    even though it is assembled from fragments shot over months.
+    The illusion of continuity requires that the rules remain stable
+    across all the fragments.
+  </p>
+
+  <p>
+    At the technical level, the Bible is a structured document
+    associated with a project. For a film called <em>Bad Bird</em>,
+    it might contain the following:
+  </p>
+
+  <div class="diagram">
+    <div class="diagram-title">Localization Bible — excerpt</div>
+    Project: Bad Bird<br>
+    Languages: Mandarin → German<br>
+    Register: literary, restrained<br>
+    Festival profile: Berlin IFF<br>
+    <br>
+    Phrase locks:<br>
+    &nbsp;&nbsp;另一場生命 → ein anderes Leben<br>
+    <br>
+    Character voices:<br>
+    &nbsp;&nbsp;Hong: provocative, sharp, self-destructive<br>
+    &nbsp;&nbsp;Qing: restrained, introspective<br>
+    <br>
+    Director notes:<br>
+    &nbsp;&nbsp;Avoid rhetorical questions for Hong<br>
+    &nbsp;&nbsp;Prefer short lines over grammatical completeness
+  </div>
+
+  <p>
+    This is not configuration. It is craft documentation.
+    The difference is important: configuration describes
+    a system's behavior, while craft documentation describes
+    a film's character. The Bible is the latter. The system
+    reads it the way a performer reads a screenplay: as
+    instruction about what kind of work is being made.
+  </p>
+</div>
+
+
+<!-- ═══════════════════════════════════════════════════════════════════════ -->
+<!-- CHAPTER 4                                                              -->
+<!-- ═══════════════════════════════════════════════════════════════════════ -->
+
+<div class="chapter">
+  <div class="chapter-label">Chapter Four</div>
+  <h2 class="chapter-title">Narrative Context</h2>
+
+  <p>
+    A subtitle does not exist in isolation. It is part of a moment,
+    which is part of a scene, which is part of a film.
+  </p>
+
+  <p>
+    This seems obvious. In practice, most translation systems treat
+    each subtitle line as an independent unit — a string of source text
+    that produces a string of target text. The result is technically
+    accurate and narratively incoherent. Individual lines pass quality
+    checks while the scene loses its shape.
+  </p>
+
+  <p>
+    The Cinematic Localization Engine works from three concentric circles
+    of context.
+  </p>
+
+  <div class="diagram">
+    <div class="diagram-title">Narrative Context — three circles</div>
+    Film<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&darr;<br>
+    Scene<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&darr;<br>
+    Moment
+  </div>
+
+  <p>
+    <strong>The Film.</strong>
+    Every translation decision is made within the awareness of the
+    whole film. What genre is this work? What register does it occupy
+    in the landscape of cinema — arthouse, festival, commercial? What
+    is its relationship to language — does it treat dialogue as music,
+    as information, as percussion? Is it being prepared for a festival
+    submission, where the economics of reading time are different from
+    streaming? These questions shape the translation before a single
+    line is processed.
+  </p>
+
+  <p>
+    <strong>The Scene.</strong>
+    Each batch of subtitles belongs to a specific narrative moment.
+    Who is in the scene? What is the relationship between them —
+    and has that relationship changed since the last scene?
+    What is the emotional purpose of this sequence:
+    confrontation, revelation, transition, silence after violence?
+    What came immediately before, and what comes immediately after?
+    A scene that follows a rupture should sound different from a scene
+    that precedes one, even if the dialogue itself seems neutral.
+  </p>
+
+  <p>
+    <strong>The Moment.</strong>
+    At the level of the individual line: who is speaking?
+    What is their emotional state in this instant — not in general,
+    but now, during this sentence?
+    What are they physically doing while they say it?
+    A line delivered while walking away is not the same line
+    delivered while standing still.
+  </p>
+
+  <div class="pull">
+    Context is not metadata.<br>
+    It is direction.
+  </div>
+
+  <p>
+    Each of these three circles feeds a different part of the system.
+    The film context shapes the register and style of translation.
+    The scene context shapes the selection of tone from among
+    available options. The moment context shapes both — it is the most
+    granular and the most perishable.
+  </p>
+
+  <p>
+    The system never collapses these three circles into a single
+    undifferentiated input. A line of dialogue that belongs to the film
+    Bad Bird is influenced by all three levels simultaneously, but
+    each level does a specific job — and collapsing them would prevent
+    the system from knowing which level is responsible for a given decision.
+  </p>
+</div>
+
+
+<!-- ═══════════════════════════════════════════════════════════════════════ -->
+<!-- CHAPTER 5                                                              -->
+<!-- ═══════════════════════════════════════════════════════════════════════ -->
+
+<div class="chapter">
+  <div class="chapter-label">Chapter Five</div>
+  <h2 class="chapter-title">The Six Voices</h2>
+
+  <p>
+    Film is made by groups of people with distinct responsibilities.
+    The director does not operate the camera. The cinematographer does not
+    cut the edit. The script supervisor does not write the score.
+    Each role exists because the work requires a kind of sustained attention
+    that cannot be distributed — someone has to be responsible for
+    this specific thing and nothing else.
+  </p>
+
+  <p>
+    The Cinematic Localization Engine is organized on the same principle.
+    Six agents, each with a single responsibility, each accountable
+    for a specific quality of the output.
+  </p>
+
+  <table>
+    <tr>
+      <th>Agent</th>
+      <th>Film Analogy</th>
+      <th>Responsibility</th>
+    </tr>
+    <tr>
+      <td>Segmentation</td>
+      <td>Script Supervisor</td>
+      <td>Ensures every line exists, has a timestamp, and belongs where it belongs. Flags anomalies. Never rewrites.</td>
+    </tr>
+    <tr>
+      <td>Translation</td>
+      <td>Translator</td>
+      <td>Produces three candidate versions of each line — not one. Offers options, not decisions.</td>
+    </tr>
+    <tr>
+      <td>Tone Calibration</td>
+      <td>Dialogue Director</td>
+      <td>Reads the candidates. Knows the character. Selects the line that serves the scene. This is the artistic core of the system.</td>
+    </tr>
+    <tr>
+      <td>Consistency</td>
+      <td>Continuity Supervisor</td>
+      <td>Applies the Bible. Ensures the phrase that appeared in reel one appears identically in reel three.</td>
+    </tr>
+    <tr>
+      <td>QA Director</td>
+      <td>Supervising Editor</td>
+      <td>Checks that the line is readable, displayable, and still serves the scene after all previous stages have touched it.</td>
+    </tr>
+    <tr>
+      <td>Output</td>
+      <td>Post-production</td>
+      <td>Delivers in every required format — timed SRT, bilingual master, festival version.</td>
+    </tr>
+  </table>
+
+  <p>
+    The Dialogue Director deserves particular attention, because it
+    is where the system diverges most sharply from existing tools.
+  </p>
+
+  <p>
+    Most translation systems produce a single output per input.
+    This system produces three. The translation agent does not know
+    which one will be used. The dialogue director does.
+    And the dialogue director makes its selection not on the basis
+    of linguistic accuracy — that is the translator's job — but on
+    the basis of character, scene, and dramatic context.
+  </p>
+
+  <p>
+    The dialogue director is informed, before it selects, of the
+    inferred tone of the segment. It is shown a score for how well
+    each candidate aligns with the character's established voice.
+    It receives the scene context. Only then does it choose — and
+    it must explain, in a single sentence, why.
+  </p>
+
+  <div class="pull">
+    The translator produces options.<br>
+    The dialogue director produces a decision.
+  </div>
+
+  <p>
+    The continuity supervisor, operating after the dialogue director,
+    holds a different kind of authority. It does not improve the line.
+    It does not make it more cinematic. It asks one question only:
+    <em>does this line comply with what the Bible says?</em> If it does,
+    it passes unchanged. If it does not, it is adjusted — not reimagined,
+    adjusted. The continuity supervisor is the least creative agent
+    in the system and the most important for the long-term coherence
+    of the work.
+  </p>
+</div>
+
+
+<!-- ═══════════════════════════════════════════════════════════════════════ -->
+<!-- CHAPTER 6                                                              -->
+<!-- ═══════════════════════════════════════════════════════════════════════ -->
+
+<div class="chapter">
+  <div class="chapter-label">Chapter Six</div>
+  <h2 class="chapter-title">The Conversation</h2>
+
+  <p>
+    For a single subtitle event — five words, four seconds — the system
+    conducts the following conversation.
+  </p>
+
+  <div class="diagram">
+    <div class="diagram-title">Processing a single line</div>
+    Source line arrives<br>
+    Script Supervisor: structure confirmed, timestamp verified<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&darr;<br>
+    Translator: three candidates produced<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&darr;<br>
+    Dialogue Director: tone inferred, candidates scored,<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+    one line selected with rationale<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&darr;<br>
+    Continuity Supervisor: Bible consulted, locks applied<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&darr;<br>
+    Supervising Editor: length, reading speed, tone — approved<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&darr;<br>
+    Output: SRT block written
+  </div>
+
+  <p>
+    In the specific case of the line <em>可我覺得賤</em>
+    from Bad Bird, the conversation went as follows.
+  </p>
+
+  <p>
+    The translator offered:
+  </p>
+
+  <p style="padding-left:1.5rem; font-style:italic; color:#555; border-left:1px solid #ddd;">
+    Aber ich fühle mich billig.<br>
+    Aber ich fühle mich wertlos.<br>
+    Aber ich fühle mich schäbig.
+  </p>
+
+  <p>
+    Three lines, each defensible. The dialogue director, knowing that
+    the speaker is Hong — sharp, self-destructive, delivering a verdict
+    rather than a complaint — and knowing that the scene is raw and
+    self-aware, selected the third. Its rationale:
+    <em>stronger emotional nuance than billig; schäbig sounds
+    like judgment, not victimhood.</em>
+  </p>
+
+  <p>
+    The continuity supervisor found no phrase locks relevant to this line
+    and passed it unchanged.
+  </p>
+
+  <p>
+    The supervising editor confirmed that <em>Aber ich fühle mich schäbig</em>
+    fits within line-length constraints, reads at a comfortable pace
+    within the allotted duration, and preserves the tone established
+    by the dialogue director. Approved.
+  </p>
+
+  <p>
+    Five words. Four seconds. Six agents. One decision.
+    That decision, made consistently across twelve hundred
+    events, is what constitutes the voice of the film
+    in another language.
+  </p>
+
+  <p>
+    The system also carries awareness of the lines surrounding
+    each segment — the two lines before and the two lines after.
+    This context window prevents a common failure mode in
+    automated translation: the locally coherent, globally
+    incoherent sequence. A line that reads perfectly in isolation
+    can create a jarring discontinuity when placed between
+    the lines that surround it in the cut.
+  </p>
+</div>
+
+
+<!-- ═══════════════════════════════════════════════════════════════════════ -->
+<!-- CHAPTER 7                                                              -->
+<!-- ═══════════════════════════════════════════════════════════════════════ -->
+
+<div class="chapter">
+  <div class="chapter-label">Chapter Seven</div>
+  <h2 class="chapter-title">Measuring Consistency Without Measuring Creativity</h2>
+
+  <p>
+    How do you know if a localization system is getting better?
+  </p>
+
+  <p>
+    The question sounds obvious. It is not. The difficulty is that
+    the most important qualities of subtitle work — tone, character
+    voice, dramatic coherence — resist quantification. A system
+    that becomes more literally accurate may simultaneously become
+    less cinematically alive. A system that improves its subtitle
+    formatting may begin to lose the character of the speaker.
+    These regressions are invisible if quality is measured as
+    a single aggregate score.
+  </p>
+
+  <p>
+    The Cinematic Localization Engine addresses this by measuring
+    quality across six independent dimensions, never combined
+    into a single number.
+  </p>
+
+  <table>
+    <tr>
+      <th>Dimension</th>
+      <th>What it measures</th>
+    </tr>
+    <tr>
+      <td>Meaning preservation</td>
+      <td>Whether the source meaning and all its implications survive the translation.</td>
+    </tr>
+    <tr>
+      <td>Cinematic naturalness</td>
+      <td>Whether the line sounds like spoken dialogue rather than translated text.</td>
+    </tr>
+    <tr>
+      <td>Tone alignment</td>
+      <td>Whether the output matches the direction provided — scene, character, and segment.</td>
+    </tr>
+    <tr>
+      <td>Character voice</td>
+      <td>Whether recurring speakers remain recognizably themselves across the film.</td>
+    </tr>
+    <tr>
+      <td>Subtitle fitness</td>
+      <td>Length, line breaks, timing, and reading speed within display constraints.</td>
+    </tr>
+    <tr>
+      <td>Context use</td>
+      <td>Whether the supplied context visibly influenced the output in the expected direction.</td>
+    </tr>
+  </table>
+
+  <p>
+    These dimensions are evaluated by a separate assessor — an evaluator
+    that reviews source, reference, context, and output simultaneously,
+    but never sees which pipeline version produced the output. This
+    removes the possibility of systematic bias toward or against
+    a particular approach.
+  </p>
+
+  <p>
+    The evaluation architecture also includes two categories of gates.
+    <em>Hard gates</em> block a change from proceeding: missing phrase locks,
+    invalid subtitle formatting, missing timestamps, severe meaning errors.
+    These are non-negotiable.
+  </p>
+
+  <p>
+    <em>Soft gates</em> warn without blocking: a material decline in tone
+    score, a drift in character consistency, a shift in human preference
+    toward the previous version. Soft gate failures are evidence,
+    not verdicts. They ask the director to look again before deciding.
+  </p>
+
+  <div class="pull">
+    A pipeline change could improve literal accuracy<br>
+    while damaging dramatic tone.<br>
+    The evaluation framework exposes that trade-off<br>
+    rather than hiding it inside an average.
+  </div>
+
+  <p>
+    The system also includes a human preference layer — a simple
+    pairwise comparison in which a director is shown the reference
+    translation alongside the new output and asked which they would
+    use. No numerical score. No forced ranking. Just:
+    <em>reference, candidate, no preference, unsure</em>.
+  </p>
+
+  <p>
+    This is the most honest measurement available for artistic work.
+    It does not ask a director to invent a number. It asks them to
+    make the same kind of choice they make in the editing room,
+    in the color suite, in the sound mix: <em>this one or that one?</em>
+  </p>
+
+  <p>
+    Over time, the accumulation of those choices becomes a dataset —
+    a record of what this director, working on this film, consistently
+    prefers. That record is more valuable than any automated score.
+  </p>
+</div>
+
+
+<!-- ═══════════════════════════════════════════════════════════════════════ -->
+<!-- CHAPTER 8                                                              -->
+<!-- ═══════════════════════════════════════════════════════════════════════ -->
+
+<div class="chapter">
+  <div class="chapter-label">Chapter Eight</div>
+  <h2 class="chapter-title">Human in the Loop</h2>
+
+  <p>
+    This phrase has become common in AI writing. It often means something
+    modest: a human can review the output before it is published. The human
+    is present at the end, as a check.
+  </p>
+
+  <p>
+    In the Cinematic Localization Engine, the human is present at
+    every point that matters.
+  </p>
+
+  <p>
+    Before processing begins, the director writes the Bible. This is not
+    optional configuration. It is the act that defines what the system
+    is allowed to do. A system without a Bible has no artistic direction.
+    It produces text. A system with a good Bible produces a version of
+    the film in another language.
+  </p>
+
+  <p>
+    Before each batch, the director sets the context. What scene is this?
+    What is its purpose? What came before? What follows? This act of
+    framing — five minutes of attention before a hundred lines are
+    processed — is worth more than any amount of post-processing correction.
+    Direction given before the work begins propagates through every decision.
+    Direction given after is repair.
+  </p>
+
+  <p>
+    After processing, the director reviews. Not every line — the system
+    is designed so that most lines require no intervention. But the lines
+    that are flagged, the lines where the system's confidence is low,
+    the lines where tone and meaning pulled in different directions:
+    these arrive already marked. The director does not search for problems.
+    The system surfaces them.
+  </p>
+
+  <div class="pull">
+    AI performs localization.<br>
+    Humans preserve authorship.
+  </div>
+
+  <p>
+    This distribution of labor is not a compromise. It is a design.
+    The system does what scales poorly for humans: maintaining perfect
+    consistency across twelve hundred decisions, applying every phrase
+    lock without exception, checking every line against reading speed
+    constraints. Humans do what scales poorly for systems: deciding what
+    the film is about, holding the character's voice in mind, feeling
+    when a line that passes every technical check is somehow still wrong.
+  </p>
+
+  <p>
+    There is a word in cinema for the person who maintains this kind of
+    sustained artistic authority over a production while delegating
+    execution to skilled collaborators.
+  </p>
+
+  <p>
+    Director.
+  </p>
+
+  <p>
+    The Cinematic Localization Engine is designed for directors.
+    Not as a tool that makes localization easier. As an infrastructure
+    that makes localization possible at the level of quality that
+    the film deserves.
+  </p>
+
+  <div class="diagram">
+    <div class="diagram-title">The complete pipeline</div>
+    Director writes the Bible<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&darr;<br>
+    Director sets narrative context<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&darr;<br>
+    Six agents process the batch<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&darr;<br>
+    Director reviews flagged lines<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&darr;<br>
+    Evaluation harness measures quality<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&darr;<br>
+    Director approves and exports<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&darr;<br>
+    Festival delivery
+  </div>
+</div>
+
+
+<!-- ═══════════════════════════════════════════════════════════════════════ -->
+<!-- CLOSING                                                                -->
+<!-- ═══════════════════════════════════════════════════════════════════════ -->
+
+<div class="closing">
+
+  <p>
+    Good subtitles disappear.
+  </p>
+
+  <p>
+    The audience does not remember the words. They remember the scene.
+    They remember the feeling that moved through them when the character
+    spoke — the weight of it, the precision, the silence that followed.
+    They do not think: that was a good translation. They do not think
+    about translation at all.
+  </p>
+
+  <p>
+    That invisibility is the measure of the work.
+  </p>
+
+  <p>
+    The Cinematic Localization Engine exists to serve that disappearance.
+    Not to make AI visible in the work. Not to demonstrate what a
+    system can do. To give the film the best possible chance of
+    remaining itself when it crosses the boundary of language —
+    recognizable, coherent, alive in the way it was alive in
+    the original.
+  </p>
+
+  <p class="final">
+    The purpose of the Cinematic Localization Engine<br>
+    is not to make translation visible.<br>
+    It is to let the film remain visible.
+  </p>
+
+</div>
+
+
+<!-- ═══════════════════════════════════════════════════════════════════════ -->
+<!-- COLOPHON                                                               -->
+<!-- ═══════════════════════════════════════════════════════════════════════ -->
+
+<div class="colophon">
+  <p>AI Studio Elsewhere Papers · No.&thinsp;1</p>
+  <p>Cinematic Localization Engine: A Human-in-the-Loop Agent Architecture for Narrative Film Translation</p>
+  <p>Written by Luca D'Isanto &nbsp;&middot;&nbsp; AI Studio Elsewhere &nbsp;&middot;&nbsp; 2026</p>
+  <p style="margin-top:1rem;">
+    The system described in this document is implemented in
+    <em>AI Studio Elsewhere</em> as the Localization Engine module.
+    Architecture: LocalizationBible · ProjectContext · SceneContext · SegmentContext ·
+    SegmentationAgent · TranslationAgent · ToneCalibrationAgent · ConsistencyEngine ·
+    QADirectorAgent · OutputAgent · Evaluation Harness.
+  </p>
+</div>
+
+</body>
+</html>
