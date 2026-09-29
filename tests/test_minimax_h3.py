@@ -508,5 +508,23 @@ class TestCostDisplayFormatting(unittest.TestCase):
         self.assertEqual(cost.total_usd, 1.17)  # unchanged — display formatting is non-destructive
 
 
+class TestTimeoutBound(unittest.TestCase):
+    """Regression pin for the 300s -> 900s bound raise.
+
+    Root-caused on 2026-09-29: two real 2K/9s production generations took
+    324s and 361s server-side and succeeded, but the client's 300s bound
+    reported them as timeouts before they completed. This does not re-test
+    the bounded-backoff mechanism itself (see TestLifecycleFailureModes /
+    test_timeout_never_polls_forever for that) — it only pins the default
+    value so a future edit can't silently shrink it back below the
+    observed real-world durations without a test failing.
+    """
+
+    def test_default_max_wait_covers_observed_2k_generation_times(self):
+        observed_worst_case_seconds = 361
+        self.assertGreater(mmh3.MiniMaxH3Agent.DEFAULT_MAX_WAIT_SECONDS, observed_worst_case_seconds)
+        self.assertEqual(mmh3.MiniMaxH3Agent.DEFAULT_MAX_WAIT_SECONDS, 900)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -234,7 +234,14 @@ class MiniMaxH3Agent:
 
     # Bounded, increasing backoff — never a tight loop, capped at 10s.
     DEFAULT_POLL_INTERVALS: tuple = (2, 3, 5, 8, 10, 10, 10, 10, 10, 10)
-    DEFAULT_MAX_WAIT_SECONDS = 300
+
+    # 300s was the original (768P/4s-derived) value and is too short: two
+    # real 2K/9s production generations on 2026-09-29 took 324s and 361s
+    # server-side and were incorrectly reported as client-side timeouts even
+    # though they had succeeded. H3's documented ceiling is 15s at 2K, which
+    # scales to well over 300s at the observed rate — 900s gives real margin
+    # for the slowest documented case without being unbounded.
+    DEFAULT_MAX_WAIT_SECONDS = 900
 
     def __init__(self, api_key: Optional[str] = None):
         self.api_key = api_key or os.getenv("MINIMAX_API_KEY")
