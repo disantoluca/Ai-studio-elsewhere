@@ -111,27 +111,30 @@ class TestLifecycleFailureModes(unittest.TestCase):
 class TestQueryEnvelopeContract(unittest.TestCase):
     """Regression tests for the real v2 Query Task envelope, {"task": {...}}.
 
-    Root-caused from the 2026-09-29 real smoke test (task 446972354716118):
-    the client previously read status/content off the top level of the
-    response body, which the real API never populates there, so every real
-    generation silently ran out the polling clock and reported 'timeout'
-    even on server-side success. _extract_task() normalizes the envelope in
-    one place; these tests pin that behavior down.
+    Root-caused from a real 2026-09-29 smoke test: the client previously read
+    status/content off the top level of the response body, which the real
+    API never populates there, so every real generation silently ran out the
+    polling clock and reported 'timeout' even on server-side success.
+    _extract_task() normalizes the envelope in one place; these tests pin
+    that behavior down.
     """
 
-    # A sanitized copy of the ACTUAL payload captured from the real
-    # 2026-09-29 smoke test against task 446972354716118. No credentials
-    # were ever present in this response; nothing is redacted.
+    # A sanitized copy of the SHAPE of the payload captured from a real
+    # 2026-09-29 smoke test. The task id and output URL below are synthetic
+    # (the originals identified a specific paid generation and its asset —
+    # neither is a credential, but neither has any testing value either, so
+    # they're not reproduced here). Every field name, nesting level, and
+    # value type is preserved exactly as observed, including the fields our
+    # model doesn't otherwise use (usage.total_tokens etc.).
     REAL_SUCCEEDED_PAYLOAD = {
         "task": {
-            "id": "446972354716118",
+            "id": "999000111222333",
             "model": "MiniMax-H3",
             "status": "succeeded",
             "created_at": 1790677003,
             "updated_at": 1790677102,
             "content": {
-                "url": "https://video-product.cdn.minimax.io/inference_output/rollout/"
-                       "2026-09-29/1b834950-2695-4d68-8fdb-0e22f88eee4e/output_aigc.mp4"
+                "url": "https://video-product.cdn.minimax.io/sanitized/output_aigc.mp4"
             },
             "resolution": "768P",
             "duration": 4,
@@ -245,9 +248,9 @@ class TestQueryEnvelopeContract(unittest.TestCase):
     @patch("minimax_h3_agent.requests.get")
     @patch("minimax_h3_agent.requests.post")
     def test_repaired_parser_ingests_the_real_captured_payload(self, mock_post, mock_get, mock_sleep):
-        """Replays the exact sanitized payload from the real 2026-09-29
-        smoke test (task 446972354716118) through the repaired parser."""
-        mock_post.return_value = _resp(200, {"task_id": "446972354716118"})
+        """Replays the sanitized-shape payload from a real 2026-09-29 smoke
+        test through the repaired parser (see REAL_SUCCEEDED_PAYLOAD)."""
+        mock_post.return_value = _resp(200, {"task_id": "999000111222333"})
         mock_get.return_value = _resp(200, self.REAL_SUCCEEDED_PAYLOAD)
 
         agent = mmh3.MiniMaxH3Agent(api_key="test-key")
@@ -256,7 +259,7 @@ class TestQueryEnvelopeContract(unittest.TestCase):
         record = agent.generate_video(request, pricing_version="2026-09-29", estimated_cost_usd=0.32)
 
         self.assertEqual(record.status, "succeeded")
-        self.assertEqual(record.task_id, "446972354716118")
+        self.assertEqual(record.task_id, "999000111222333")
         self.assertTrue(record.output_url.endswith("output_aigc.mp4"))
         # usage.total_tokens is present in the real payload but must NOT
         # surface as actual_cost_usd — no cost field exists in this payload.
