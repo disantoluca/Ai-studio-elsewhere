@@ -288,6 +288,13 @@ try:
 except Exception:
     JIMENG_AVAILABLE = False
 
+# MiniMax H3 for video generation (second video provider, alongside Runway)
+try:
+    from minimax_h3_agent import get_minimax_h3_agent
+    MINIMAX_H3_AVAILABLE = True
+except ImportError:
+    MINIMAX_H3_AVAILABLE = False
+
 # ===========================================
 # Configuration & Paths
 # ===========================================
@@ -1451,6 +1458,17 @@ if runway_key:
     os.environ["RUNWAY_API_KEY"] = runway_key
     st.sidebar.success("✅ Runway configured")
 
+st.sidebar.subheader("🌀 Video Generation (MiniMax H3)")
+minimax_key = st.sidebar.text_input(
+    "MiniMax API Key",
+    type="password",
+    value=os.getenv("MINIMAX_API_KEY", ""),
+    help="Get from https://platform.minimax.io/"
+)
+if minimax_key:
+    os.environ["MINIMAX_API_KEY"] = minimax_key
+    st.sidebar.success("✅ MiniMax H3 configured")
+
 st.sidebar.markdown("---")
 
 # Data folders info
@@ -1967,6 +1985,8 @@ with tab_concepts:
             "WANX_AVAILABLE": WANX_AVAILABLE,
             "DASHSCOPE_API_KEY": "set" if os.getenv("DASHSCOPE_API_KEY") else "MISSING",
             "ELEVENLABS_API_KEY": "set" if os.getenv("ELEVENLABS_API_KEY") else "MISSING",
+            "MINIMAX_H3_AVAILABLE": MINIMAX_H3_AVAILABLE,
+            "MINIMAX_API_KEY": "set" if os.getenv("MINIMAX_API_KEY") else "MISSING",
         })
         if st.button("🧪 Test OpenAI Image (gpt-image-1)", key="test_openai_img"):
             if openai_client:
@@ -2259,59 +2279,73 @@ with tab_video:
                 for scene in project.scenes
             ]
             
-            try:
-                import importlib, sys as _sys
-                if 'runway_video_ui' in _sys.modules:
-                    importlib.reload(_sys.modules['runway_video_ui'])
-                from runway_video_ui import display_video_generation_tab
-                display_video_generation_tab(scenes_for_video, project.title_en)
-            except Exception as _video_err:
-                st.error(f"⚠️ Video module error: {_video_err}")
-                st.markdown("---")
+            provider_choice = st.radio(
+                "Video provider",
+                ["Runway", "MiniMax H3"],
+                horizontal=True,
+                key="video_provider_choice",
+            )
+
+            if provider_choice == "Runway":
+                try:
+                    import importlib, sys as _sys
+                    if 'runway_video_ui' in _sys.modules:
+                        importlib.reload(_sys.modules['runway_video_ui'])
+                    from runway_video_ui import display_video_generation_tab
+                    display_video_generation_tab(scenes_for_video, project.title_en)
+                except Exception as _video_err:
+                    st.error(f"⚠️ Video module error: {_video_err}")
+                    st.markdown("---")
                 
-                # Demo fallback: let directors preview workflow without API
-                st.markdown("#### 🎬 Video Generation Preview (Demo Mode)")
-                st.info("This demo shows the video generation workflow. Connect Runway API keys to generate real videos.")
+                    # Demo fallback: let directors preview workflow without API
+                    st.markdown("#### 🎬 Video Generation Preview (Demo Mode)")
+                    st.info("This demo shows the video generation workflow. Connect Runway API keys to generate real videos.")
                 
-                # Scene selector
-                scene_names = [s["heading"] for s in scenes_for_video]
-                selected_scene = st.selectbox("🎬 Select Scene", scene_names, key="demo_video_scene")
-                scene_data = scenes_for_video[scene_names.index(selected_scene)]
+                    # Scene selector
+                    scene_names = [s["heading"] for s in scenes_for_video]
+                    selected_scene = st.selectbox("🎬 Select Scene", scene_names, key="demo_video_scene")
+                    scene_data = scenes_for_video[scene_names.index(selected_scene)]
                 
-                col1, col2 = st.columns(2)
-                with col1:
-                    shot_type = st.selectbox("📹 Shot Type", [
-                        "Wide Shot", "Medium Shot", "Close-Up", 
-                        "Dolly In", "Pan Left", "Orbit", "Push In"
-                    ], key="demo_shot_type")
-                with col2:
-                    duration = st.slider("⏱️ Duration (seconds)", 3, 15, 5, key="demo_duration")
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        shot_type = st.selectbox("📹 Shot Type", [
+                            "Wide Shot", "Medium Shot", "Close-Up", 
+                            "Dolly In", "Pan Left", "Orbit", "Push In"
+                        ], key="demo_shot_type")
+                    with col2:
+                        duration = st.slider("⏱️ Duration (seconds)", 3, 15, 5, key="demo_duration")
                 
-                st.text_area("🎯 Scene Prompt", scene_data["prompt"], height=80, key="demo_prompt")
+                    st.text_area("🎯 Scene Prompt", scene_data["prompt"], height=80, key="demo_prompt")
                 
-                if st.button("🎥 Generate Demo Video", type="primary", use_container_width=True, key="demo_gen"):
-                    with st.spinner("🎬 Generating preview..."):
-                        import time
-                        progress = st.progress(0)
-                        for i in range(100):
-                            time.sleep(0.02)
-                            progress.progress(i + 1)
+                    if st.button("🎥 Generate Demo Video", type="primary", use_container_width=True, key="demo_gen"):
+                        with st.spinner("🎬 Generating preview..."):
+                            import time
+                            progress = st.progress(0)
+                            for i in range(100):
+                                time.sleep(0.02)
+                                progress.progress(i + 1)
                         
-                        st.success("✅ Demo video generated!")
-                        st.markdown(f"""
-                        **Scene:** {selected_scene}  
-                        **Shot:** {shot_type}  
-                        **Duration:** {duration}s  
+                            st.success("✅ Demo video generated!")
+                            st.markdown(f"""
+                            **Scene:** {selected_scene}  
+                            **Shot:** {shot_type}  
+                            **Duration:** {duration}s  
                         
-                        🎬 *In production mode, Runway Gen-4.5 would generate a cinematic video clip here.*  
-                        *To enable: add `RUNWAY_API_KEY` to your Railway environment variables.*
-                        """)
+                            🎬 *In production mode, Runway Gen-4.5 would generate a cinematic video clip here.*  
+                            *To enable: add `RUNWAY_API_KEY` to your Railway environment variables.*
+                            """)
                         
-                        # Show a placeholder with scene info
-                        st.markdown("---")
-                        st.markdown("##### 📋 Shot List Generated")
-                        for i, s in enumerate(scenes_for_video[:5], 1):
-                            st.write(f"**Shot {i}:** {s['heading']}")
+                            # Show a placeholder with scene info
+                            st.markdown("---")
+                            st.markdown("##### 📋 Shot List Generated")
+                            for i, s in enumerate(scenes_for_video[:5], 1):
+                                st.write(f"**Shot {i}:** {s['heading']}")
+            else:
+                try:
+                    from minimax_h3_ui import display_minimax_h3_tab
+                    display_minimax_h3_tab(scenes_for_video, project.title_en)
+                except Exception as _mmh3_err:
+                    st.error(f"⚠️ MiniMax H3 module error: {_mmh3_err}")
 
 # ===========================================
 # Tab: Characters (GWM-1 Avatars)
