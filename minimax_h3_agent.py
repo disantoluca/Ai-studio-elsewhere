@@ -589,7 +589,17 @@ _minimax_h3_agent: Optional[MiniMaxH3Agent] = None
 
 
 def get_minimax_h3_agent() -> MiniMaxH3Agent:
+    """Singleton getter, matching runway_video_agent.get_runway_agent().
+
+    Re-constructs the agent if it was previously built without a key but
+    one has since appeared in the environment (e.g. entered into the
+    Streamlit sidebar after the tab was first rendered) — otherwise the
+    very first unconfigured visit to the tab would permanently freeze
+    `available=False` for the life of the server process, since Streamlit
+    reruns the script but this module-level singleton persists across
+    those reruns. Once truly available, the same instance is kept (so
+    `generation_history` isn't lost mid-session)."""
     global _minimax_h3_agent
-    if _minimax_h3_agent is None:
+    if _minimax_h3_agent is None or (not _minimax_h3_agent.available and os.getenv("MINIMAX_API_KEY")):
         _minimax_h3_agent = MiniMaxH3Agent()
     return _minimax_h3_agent

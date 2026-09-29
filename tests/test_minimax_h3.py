@@ -13,6 +13,7 @@ ffprobe subprocess call is mocked.
 import json
 import subprocess
 import sys
+import os
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -524,6 +525,46 @@ class TestTimeoutBound(unittest.TestCase):
         observed_worst_case_seconds = 361
         self.assertGreater(mmh3.MiniMaxH3Agent.DEFAULT_MAX_WAIT_SECONDS, observed_worst_case_seconds)
         self.assertEqual(mmh3.MiniMaxH3Agent.DEFAULT_MAX_WAIT_SECONDS, 900)
+
+
+class TestSingletonReconfiguration(unittest.TestCase):
+    """Regression for: a director opens the H3 tab before entering an API
+    key, then enters one in the sidebar afterward, in the same running
+    Streamlit process. get_minimax_h3_agent() must notice the key that
+    showed up after the singleton was first built — otherwise the tab is
+    permanently stuck reporting 'not configured' for the life of the
+    server process, since Streamlit reruns the script but this
+    module-level singleton persists across those reruns."""
+
+    def setUp(self):
+        self._saved_singleton = mmh3._minimax_h3_agent
+        self._saved_env = os.environ.pop("MINIMAX_API_KEY", None)
+        mmh3._minimax_h3_agent = None
+
+    def tearDown(self):
+        mmh3._minimax_h3_agent = self._saved_singleton
+        if self._saved_env is not None:
+            os.environ["MINIMAX_API_KEY"] = self._saved_env
+        else:
+            os.environ.pop("MINIMAX_API_KEY", None)
+
+    def test_becomes_available_after_key_is_entered_post_construction(self):
+        first = mmh3.get_minimax_h3_agent()
+        self.assertFalse(first.available)
+
+        os.environ["MINIMAX_API_KEY"] = "entered-after-the-fact"
+        second = mmh3.get_minimax_h3_agent()
+
+        self.assertTrue(second.available)
+        self.assertEqual(second.api_key, "entered-after-the-fact")
+
+    def test_stays_the_same_instance_once_available(self):
+        os.environ["MINIMAX_API_KEY"] = "already-configured"
+        first = mmh3.get_minimax_h3_agent()
+        self.assertTrue(first.available)
+
+        second = mmh3.get_minimax_h3_agent()
+        self.assertIs(first, second)  # generation_history must not be dropped mid-session
 
 
 if __name__ == "__main__":
