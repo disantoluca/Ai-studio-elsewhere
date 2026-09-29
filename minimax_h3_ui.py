@@ -61,6 +61,13 @@ _AUDIO_LABELS = {
 }
 
 
+def _usd(amount: float) -> str:
+    """Display-only USD formatting — two decimals, no bare API-style
+    4-decimal values. Never touches the underlying stored/estimated float,
+    which keeps its full precision in `cost`/`GenerationRecord`."""
+    return f"${amount:.2f} USD"
+
+
 def display_minimax_h3_tab(scenes: List[Dict], project_title: str):
     """MiniMax H3 video generation — V1 scope only."""
     if not MINIMAX_H3_AVAILABLE or not MINIMAX_PRICING_AVAILABLE:
@@ -136,13 +143,21 @@ def display_minimax_h3_tab(scenes: List[Dict], project_title: str):
         st.error(f"Pricing error: {e}")
         return
 
-    st.markdown(f"### Estimated cost: **${cost.total_usd:.4f}**")
+    st.markdown(f"### Estimated cost: **{_usd(cost.total_usd)}**")
     with st.expander("Cost breakdown", expanded=False):
-        for li in cost.line_items:
-            st.write(f"- {li.label}: ${li.amount_usd:.4f}")
+        st.write(f"**{model} · {resolution}**")
+        for i, li in enumerate(cost.line_items):
+            if i == 0 and duration:
+                # Primary output line — show the underlying per-second rate,
+                # not just the label, for a director-legible breakdown.
+                per_second = li.amount_usd / duration
+                st.write(f"- {duration} sec × ${per_second:.2f}/sec = {_usd(li.amount_usd)}")
+            else:
+                st.write(f"- {li.label}: {_usd(li.amount_usd)}")
+        st.write(f"**Estimated total: {_usd(cost.total_usd)}**")
 
     confirm = st.checkbox(
-        f"I understand this will call the paid MiniMax API for an estimated ${cost.total_usd:.4f}.",
+        f"I understand this will call the paid MiniMax API for an estimated {_usd(cost.total_usd)}.",
         key="mmh3_confirm",
     )
 

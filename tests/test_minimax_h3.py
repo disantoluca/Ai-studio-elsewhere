@@ -3,10 +3,11 @@
 """
 MiniMax H3 test island — the first tests in this repository.
 
-Scope is deliberately narrow: minimax_h3_agent.py and minimax_h3_pricing.py
-only. No other part of AIStudioElsewhere is exercised, and this suite makes
-NO real network call and NO real (paid) MiniMax generation — every HTTP call
-and every ffprobe subprocess call is mocked.
+Scope is deliberately narrow: minimax_h3_agent.py, minimax_h3_pricing.py,
+and the pure display-formatting helper in minimax_h3_ui.py. No other part
+of AIStudioElsewhere is exercised, and this suite makes NO real network
+call and NO real (paid) MiniMax generation — every HTTP call and every
+ffprobe subprocess call is mocked.
 """
 
 import json
@@ -20,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import minimax_h3_agent as mmh3
 import minimax_h3_pricing as pricing
+import minimax_h3_ui as mmh3_ui
 
 
 def _resp(status_code=200, json_data=None, text=""):
@@ -463,6 +465,47 @@ class TestAudioDetection(unittest.TestCase):
 
         self.assertEqual(record.status, "succeeded")
         self.assertIsNone(record.audio_present)
+
+
+class TestCostDisplayFormatting(unittest.TestCase):
+    """UI polish, display-only: $1.1700 -> $1.17 USD. Does not touch
+    minimax_h3_pricing.py — the underlying float keeps full precision;
+    only minimax_h3_ui._usd() formats it for on-screen display."""
+
+    def test_standard_two_decimal_case(self):
+        self.assertEqual(mmh3_ui._usd(1.17), "$1.17 USD")
+
+    def test_rounds_beyond_two_decimals_for_display_only(self):
+        # e.g. a real pricing.CostEstimate.total_usd of 1.1700
+        self.assertEqual(mmh3_ui._usd(1.1700), "$1.17 USD")
+        self.assertEqual(mmh3_ui._usd(1.1749), "$1.17 USD")
+
+    def test_binary_float_rounding_is_not_a_half_up_guarantee(self):
+        """_usd() is `f"{amount:.2f}"` — Python's binary-float formatting,
+        not a decimal ROUND_HALF_UP rule. 1.175 happens to format as
+        "1.18" here only because that literal's actual stored double is
+        very slightly above 1.175; the same pattern does NOT hold in
+        general (e.g. f"{2.675:.2f}" == "2.67", not "2.68"). This test
+        pins today's Python float-formatting behavior for this specific
+        value — it is not a claim that _usd() guarantees half-up rounding
+        for arbitrary inputs."""
+        self.assertEqual(mmh3_ui._usd(1.175), "$1.18 USD")
+        self.assertEqual(mmh3_ui._usd(2.675), "$2.67 USD")
+
+    def test_zero_and_whole_numbers(self):
+        self.assertEqual(mmh3_ui._usd(0), "$0.00 USD")
+        self.assertEqual(mmh3_ui._usd(5), "$5.00 USD")
+
+    def test_real_h3_2k_example_from_pricing_module(self):
+        """Reproduces the exact $1.17 example: MiniMax-H3, 2K, 9 seconds."""
+        cost = pricing.estimate_video_cost(model="MiniMax-H3", resolution="2K", duration_seconds=9)
+        self.assertAlmostEqual(cost.total_usd, 1.17)
+        self.assertEqual(mmh3_ui._usd(cost.total_usd), "$1.17 USD")
+
+    def test_formatting_does_not_mutate_source_value(self):
+        cost = pricing.estimate_video_cost(model="MiniMax-H3", resolution="2K", duration_seconds=9)
+        mmh3_ui._usd(cost.total_usd)
+        self.assertEqual(cost.total_usd, 1.17)  # unchanged — display formatting is non-destructive
 
 
 if __name__ == "__main__":
