@@ -113,8 +113,8 @@ class MiniMaxTimeoutError(MiniMaxH3Error):
 def _extract_task(payload: Any) -> Dict[str, Any]:
     """Normalize the real Query Task envelope: ``{"task": {...}}``.
 
-    Empirically confirmed against real task 446972354716118 (smoke test,
-    2026-09-29) — the Query Task response nests every field (status,
+    Empirically confirmed against the 2026-09-29 production smoke test —
+    the Query Task response nests every field (status,
     content, usage, ...) one level down under a top-level "task" key. The
     Create Task response is NOT wrapped this way (it returns a flat
     ``{"task_id": ...}``, also confirmed by the same smoke test) — only
@@ -487,7 +487,7 @@ class MiniMaxH3Agent:
         only ever returns a value if a future response shape adds one —
         provenance never fabricates a cost that wasn't actually returned.
 
-        The real 2026-09-29 smoke test (task 446972354716118) showed a
+        The 2026-09-29 production smoke test showed a
         `usage` object containing `total_tokens`/`prompt_tokens`/
         `completion_tokens` (e.g. 130196 completion tokens for a 4s 768P
         clip). This is an observed, undocumented field — video pricing is
@@ -530,7 +530,7 @@ def detect_audio_stream(media_path_or_url: str, ffprobe_bin: Optional[str] = Non
     only source of truth for `audio_present`, and only once real output
     exists to inspect.
 
-    Empirical note (2026-09-29 real smoke test, task 446972354716118): the
+    Empirical note (the 2026-09-29 production smoke test): the
     inspected MiniMax-H3 v2 output was H.264 video + stereo AAC audio
     (32kHz, 2 channels), confirming H3 output CAN carry native audio. This
     does not change the function's behavior — audio_present is still
