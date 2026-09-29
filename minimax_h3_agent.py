@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# Deploy-trigger no-op: forces a fresh Railway build after a stale
+# deployment was reactivated ahead of this file's real latest commit.
 """
 MiniMax H3 Video Generation Provider
 For AI Studio Elsewhere
