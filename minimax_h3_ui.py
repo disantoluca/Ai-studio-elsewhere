@@ -17,6 +17,7 @@ here.
 import base64
 import logging
 import mimetypes
+import uuid
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -156,6 +157,98 @@ def _normalize_reference_image(source) -> Tuple[Optional[str], Optional[str]]:
     return _encode_data_uri(source.getvalue(), fmt)
 
 
+# ── MiniMax-native Shot Sequence ────────────────────────────────────────────
+# Additive workflow, separate from Runway's "Shot Sequence"/"Shot Control
+# Panel" (runway_video_ui.py, Director Mode) — deliberately not shared code
+# and runway_video_ui.py is not touched. Each MiniMax shot owns its own
+# label/prompt/camera/lighting/references; a shot is generated independently
+# through the exact same MiniMaxH3Agent.generate_video() path as the
+# single-shot workflow above. No sequence rendering/composition, transitions,
+# take management, or cross-shot reference inheritance in V1 — a sequence
+# here is simply an ordered list of independently controllable shots.
+
+def _compose_shot_prompt(base_prompt: str, camera_direction: str = "", lighting_direction: str = "") -> str:
+    """Camera/lighting are prose hints, not MiniMax API fields — MiniMax has
+    no such structured parameters (confirmed against the verified v2
+    contract). They're appended into the same free-text prompt, matching
+    how real Blue Tears prompts already embed 'Camera: ...' / 'Lighting: ...'
+    sections by hand."""
+    parts = []
+    if base_prompt and base_prompt.strip():
+        parts.append(base_prompt.strip())
+    if camera_direction and camera_direction.strip():
+        parts.append(f"Camera: {camera_direction.strip()}")
+    if lighting_direction and lighting_direction.strip():
+        parts.append(f"Lighting: {lighting_direction.strip()}")
+    return "\n\n".join(parts)
+
+
+def _build_shot_reference_assets(image_sources: List) -> Tuple[List[ContentItem], List[str]]:
+    """Normalize ONE shot's own image sources into reference_image
+    ContentItems. Takes only this shot's sources as a parameter — no access
+    to any other shot's data exists in this function's scope, so cross-shot
+    leakage is structurally impossible, not merely avoided by convention.
+    Returns (assets, error_messages); silently-dropped-without-a-reason
+    never happens — every rejected source produces a message."""
+    assets: List[ContentItem] = []
+    errors: List[str] = []
+    for source in image_sources[:MAX_REFERENCE_IMAGES]:
+        url, err = _normalize_reference_image(source)
+        if url:
+            assets.append(ContentItem(type="image_url", url=url, role="reference_image"))
+        else:
+            name = getattr(source, "name", str(source))
+            errors.append(f"{name}: {err}")
+    return assets, errors
+
+
+def _generate_shot(
+    agent,
+    model: str,
+    resolution: str,
+    duration: int,
+    ratio: str,
+    shot_label: str,
+    base_prompt: str,
+    camera_direction: str,
+    lighting_direction: str,
+    image_sources: List,
+    pricing_version: Optional[str],
+    estimated_cost_usd: Optional[float],
+):
+    """Generate exactly one shot. Every argument describes THIS shot only —
+    there is no parameter through which another shot's prompt/label/images
+    could reach this call. Does not alter the MiniMax API contract, polling,
+    audio detection, or pricing — delegates straight to the same
+    MiniMaxH3Agent.generate_video() the single-shot workflow already uses."""
+    prompt = _compose_shot_prompt(base_prompt, camera_direction, lighting_direction)
+    reference_assets, _errors = _build_shot_reference_assets(image_sources)
+    request = VideoGenRequest(
+        prompt=prompt,
+        model=model,
+        resolution=resolution,
+        duration=duration,
+        ratio=ratio,
+        reference_assets=reference_assets,
+    )
+    return agent.generate_video(
+        request,
+        pricing_version=pricing_version,
+        estimated_cost_usd=estimated_cost_usd,
+        shot_label=shot_label,
+    )
+
+
+def _new_shot(label_hint: str = "") -> Dict:
+    return {
+        "id": str(uuid.uuid4()),
+        "label": label_hint,
+        "prompt": "",
+        "camera": "",
+        "lighting": "",
+    }
+
+
 def display_minimax_h3_tab(scenes: List[Dict], project_title: str):
     """MiniMax H3 video generation — V1 scope only."""
     if not MINIMAX_H3_AVAILABLE or not MINIMAX_PRICING_AVAILABLE:
@@ -172,6 +265,13 @@ def display_minimax_h3_tab(scenes: List[Dict], project_title: str):
     agent = get_minimax_h3_agent()
     if not agent.available:
         st.warning("⚠️ MiniMax API not configured. Add MINIMAX_API_KEY (Railway env var or sidebar field).")
+        return
+
+    workflow = st.radio(
+        "Workflow", ["Single shot", "Shot Sequence"], key="mmh3_workflow", horizontal=True
+    )
+    if workflow == "Shot Sequence":
+        _display_shot_sequence(agent)
         return
 
     scene_options = {f"Scene {i+1}: {s.get('heading', 'Untitled')}": i for i, s in enumerate(scenes)}
@@ -347,6 +447,131 @@ def display_minimax_h3_tab(scenes: List[Dict], project_title: str):
             st.warning(f"⏱️ Timed out waiting for task {record.task_id}: {record.error}")
         else:
             st.error(f"❌ Generation {record.status}: {record.error}")
+
+    if agent.generation_history:
+        st.markdown("---")
+        st.markdown("#### Generation history")
+        for rec in reversed(agent.generation_history[-10:]):
+            with st.expander(_history_entry_title(rec)):
+                st.json(rec.to_safe_dict())
+
+
+def _display_shot_sequence(agent):
+    """MiniMax-native Shot Sequence — additive to, not a replacement for,
+    the single-shot workflow above. V1: an ordered list of independently
+    controllable shots, each generated on its own. No composition/
+    rendering, transitions, take management, or automatic cross-shot
+    reference inheritance — continuity across shots is an explicit
+    director choice made by re-uploading the same reference(s), not
+    something this UI does automatically."""
+    st.subheader("Shot Sequence")
+    st.caption(
+        "Each shot owns its own label, prompt, camera/lighting notes, and reference "
+        "images. Generation happens per shot — sequence assembly isn't built yet."
+    )
+
+    if "mmh3_shots" not in st.session_state:
+        st.session_state["mmh3_shots"] = [_new_shot("Shot 01")]
+    shots = st.session_state["mmh3_shots"]
+
+    col1, col2 = st.columns(2)
+    with col1:
+        model = st.selectbox("Model", MODELS, key="mmh3_seq_model")
+    with col2:
+        allowed_res = sorted(MODEL_RESOLUTIONS[model])
+        resolution = st.selectbox("Resolution", allowed_res, key="mmh3_seq_resolution")
+    lo, hi = MODEL_DURATION_RANGE[model]
+    duration = st.slider("Duration (seconds)", lo, hi, lo, key="mmh3_seq_duration")
+    ratio = st.selectbox("Aspect ratio", sorted(VALID_RATIOS), key="mmh3_seq_ratio")
+
+    shot_to_remove = None
+    for i, shot in enumerate(shots):
+        sid = shot["id"]
+        with st.expander(shot["label"] or f"Shot {i+1}", expanded=True):
+            shot["label"] = st.text_input("Shot label", value=shot["label"], key=f"mmh3_seq_label_{sid}")
+            shot["prompt"] = st.text_area("Prompt", value=shot["prompt"], height=100, key=f"mmh3_seq_prompt_{sid}")
+            c1, c2 = st.columns(2)
+            with c1:
+                shot["camera"] = st.text_input(
+                    "Camera direction (optional)", value=shot["camera"], key=f"mmh3_seq_camera_{sid}"
+                )
+            with c2:
+                shot["lighting"] = st.text_input(
+                    "Lighting direction (optional)", value=shot["lighting"], key=f"mmh3_seq_lighting_{sid}"
+                )
+
+            uploaded_files = st.file_uploader(
+                "Reference images (optional, this shot only)",
+                type=["png", "jpg", "jpeg", "webp"],
+                accept_multiple_files=True,
+                key=f"mmh3_seq_upload_{sid}",
+                help=f"Up to {MAX_REFERENCE_IMAGES} images for this shot only — never shared with other shots.",
+            )
+            image_sources = list(uploaded_files[:MAX_REFERENCE_IMAGES]) if uploaded_files else []
+            if uploaded_files and len(uploaded_files) > MAX_REFERENCE_IMAGES:
+                st.warning(f"⚠️ Only the first {MAX_REFERENCE_IMAGES} images will be used.")
+
+            reference_assets, ref_errors = _build_shot_reference_assets(image_sources)
+            for err in ref_errors:
+                st.warning(f"⚠️ Skipped {err}")
+            if image_sources:
+                preview_cols = st.columns(min(len(image_sources), 5))
+                for j, f in enumerate(image_sources):
+                    with preview_cols[j % len(preview_cols)]:
+                        st.image(f, width=120, caption=f.name)
+
+            try:
+                cost = estimate_video_cost(
+                    model=model, resolution=resolution, duration_seconds=duration,
+                    num_reference_images=len(reference_assets),
+                )
+            except MiniMaxPricingError as e:
+                st.error(f"Pricing error: {e}")
+                cost = None
+
+            if cost is not None:
+                st.markdown(f"**Estimated cost: {_usd(cost.total_usd)}**")
+                confirm = st.checkbox(
+                    f"I understand this will call the paid MiniMax API for an estimated {_usd(cost.total_usd)}.",
+                    key=f"mmh3_seq_confirm_{sid}",
+                )
+                if st.button(
+                    f"🌀 Generate {shot['label'] or f'Shot {i+1}'}",
+                    type="primary", disabled=not confirm, key=f"mmh3_seq_generate_{sid}",
+                ):
+                    with st.spinner("Submitting to MiniMax H3 and polling for completion..."):
+                        record = _generate_shot(
+                            agent,
+                            model=model, resolution=resolution, duration=duration, ratio=ratio,
+                            shot_label=shot["label"] or f"Shot {i+1}",
+                            base_prompt=shot["prompt"], camera_direction=shot["camera"],
+                            lighting_direction=shot["lighting"], image_sources=image_sources,
+                            pricing_version=cost.pricing_version, estimated_cost_usd=cost.total_usd,
+                        )
+                        if record.status == "succeeded" and record.output_url:
+                            record.audio_present = detect_audio_stream(record.output_url)
+
+                    if record.status == "succeeded":
+                        st.success(f"✅ Succeeded — task {record.task_id}")
+                        if record.output_url:
+                            st.video(record.output_url)
+                            st.caption("Remote MiniMax result URL — not a durable local asset in V1.")
+                        st.caption(_AUDIO_LABELS[record.audio_present])
+                    elif record.status == "timeout":
+                        st.warning(f"⏱️ Timed out: {record.error}")
+                    else:
+                        st.error(f"❌ {record.status}: {record.error}")
+
+            if st.button("🗑️ Remove this shot", key=f"mmh3_seq_remove_{sid}"):
+                shot_to_remove = sid
+
+    if shot_to_remove is not None:
+        st.session_state["mmh3_shots"] = [s for s in shots if s["id"] != shot_to_remove]
+        st.rerun()
+
+    if st.button("+ Add Shot", key="mmh3_seq_add_shot"):
+        st.session_state["mmh3_shots"].append(_new_shot(f"Shot {len(shots) + 1:02d}"))
+        st.rerun()
 
     if agent.generation_history:
         st.markdown("---")

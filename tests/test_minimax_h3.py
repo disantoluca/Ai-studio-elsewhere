@@ -780,5 +780,107 @@ class TestShotLabel(unittest.TestCase):
         self.assertEqual(title, "2026-09-30T12:00:00+00:00 — MiniMax-H3 — succeeded")
 
 
+class TestShotSequence(unittest.TestCase):
+    """MiniMax-native Shot Sequence (2026-09-30) — additive to the
+    single-shot workflow, separate from Runway's own Shot Sequence/Shot
+    Control Panel (runway_video_ui.py, untouched). Isolation between
+    shots is enforced structurally: _generate_shot() only ever receives
+    one shot's own data as explicit parameters, with no way to reach
+    another shot's prompt/label/images."""
+
+    def _mock_success(self, mock_post, mock_get, task_id="t1"):
+        mock_post.return_value = _resp(200, {"task_id": task_id})
+        mock_get.return_value = _resp(200, {"task": {"status": "succeeded", "content": {"url": "https://cdn/out.mp4"}}})
+
+    @patch("minimax_h3_agent.time.sleep", return_value=None)
+    @patch("minimax_h3_agent.requests.get")
+    @patch("minimax_h3_agent.requests.post")
+    def test_shot_a_and_shot_b_keep_independent_label_prompt_and_references(self, mock_post, mock_get, mock_sleep):
+        self._mock_success(mock_post, mock_get, task_id="task-a")
+        agent = mmh3.MiniMaxH3Agent(api_key="test-key")
+
+        image_a = _FakeUploadedFile("image/png", b"\x89PNG-shot-a-image")
+        record_a = mmh3_ui._generate_shot(
+            agent, model="MiniMax-H3", resolution="768P", duration=4, ratio="16:9",
+            shot_label="Shot 01 — Establishing", base_prompt="Wide beach shot",
+            camera_direction="low angle", lighting_direction="moonless night",
+            image_sources=[image_a], pricing_version="2026-09-29", estimated_cost_usd=0.32,
+        )
+
+        self._mock_success(mock_post, mock_get, task_id="task-b")
+        image_b = _FakeUploadedFile("image/png", b"\x89PNG-shot-b-image")
+        record_b = mmh3_ui._generate_shot(
+            agent, model="MiniMax-H3", resolution="768P", duration=6, ratio="16:9",
+            shot_label="Shot 02 — Gather & Rise", base_prompt="She rises slowly",
+            camera_direction="", lighting_direction="",
+            image_sources=[image_b], pricing_version="2026-09-29", estimated_cost_usd=0.48,
+        )
+
+        self.assertEqual(record_a.shot_label, "Shot 01 — Establishing")
+        self.assertEqual(record_b.shot_label, "Shot 02 — Gather & Rise")
+        self.assertIn("Wide beach shot", record_a.prompt)
+        self.assertIn("She rises slowly", record_b.prompt)
+        self.assertNotIn("She rises slowly", record_a.prompt)
+        self.assertNotIn("Wide beach shot", record_b.prompt)
+        self.assertEqual(len(record_a.reference_assets), 1)
+        self.assertEqual(len(record_b.reference_assets), 1)
+
+    @patch("minimax_h3_agent.time.sleep", return_value=None)
+    @patch("minimax_h3_agent.requests.get")
+    @patch("minimax_h3_agent.requests.post")
+    def test_shot_b_cannot_receive_shot_a_references(self, mock_post, mock_get, mock_sleep):
+        """Shot B is generated with NO access to shot A's image_sources at
+        all — not filtered out, structurally absent from the call."""
+        self._mock_success(mock_post, mock_get, task_id="task-b-only")
+        agent = mmh3.MiniMaxH3Agent(api_key="test-key")
+
+        record_b = mmh3_ui._generate_shot(
+            agent, model="MiniMax-H3", resolution="768P", duration=4, ratio="16:9",
+            shot_label="Shot 02", base_prompt="ok", camera_direction="", lighting_direction="",
+            image_sources=[],  # shot A's images were never passed in
+            pricing_version="2026-09-29", estimated_cost_usd=0.32,
+        )
+        self.assertEqual(record_b.reference_assets, [])
+
+    def test_reference_cap_respected_for_a_single_shot(self):
+        sources = [_FakeUploadedFile("image/png", f"img-{i}".encode()) for i in range(12)]
+        assets, errors = mmh3_ui._build_shot_reference_assets(sources)
+        self.assertEqual(len(assets), mmh3.MAX_REFERENCE_IMAGES)
+        self.assertEqual(errors, [])
+
+    def test_reference_count_flows_into_pricing(self):
+        sources = [_FakeUploadedFile("image/png", f"img-{i}".encode()) for i in range(3)]
+        assets, _ = mmh3_ui._build_shot_reference_assets(sources)
+        cost = pricing.estimate_video_cost(
+            model="MiniMax-H3", resolution="768P", duration_seconds=4, num_reference_images=len(assets)
+        )
+        # 3 images is within H3's free tier of 5 -> no extra line item.
+        self.assertAlmostEqual(cost.total_usd, 0.08 * 4)
+
+    @patch("minimax_h3_agent.requests.post")
+    def test_shot_label_never_enters_payload_via_generate_shot(self, mock_post):
+        mock_post.return_value = _resp(401, {"error": {"type": "auth_error", "message": "denied"}})
+        agent = mmh3.MiniMaxH3Agent(api_key="test-key")
+        mmh3_ui._generate_shot(
+            agent, model="MiniMax-H3", resolution="768P", duration=4, ratio="16:9",
+            shot_label="Shot 02 — Gather & Rise", base_prompt="ok",
+            camera_direction="", lighting_direction="", image_sources=[],
+            pricing_version=None, estimated_cost_usd=None,
+        )
+        sent_payload = mock_post.call_args.kwargs["json"]
+        self.assertNotIn("shot_label", sent_payload)
+        self.assertNotIn("Gather & Rise", json.dumps(sent_payload))
+
+    def test_compose_shot_prompt_appends_camera_and_lighting_as_prose(self):
+        composed = mmh3_ui._compose_shot_prompt("Base action.", "low angle", "moonless night")
+        self.assertIn("Base action.", composed)
+        self.assertIn("Camera: low angle", composed)
+        self.assertIn("Lighting: moonless night", composed)
+
+    def test_compose_shot_prompt_omits_empty_camera_lighting(self):
+        composed = mmh3_ui._compose_shot_prompt("Base action.", "", "")
+        self.assertEqual(composed, "Base action.")
+
+
 if __name__ == "__main__":
     unittest.main()
