@@ -1270,6 +1270,20 @@ def load_project(project_id: str) -> Optional[Project]:
         st.error(f"❌ Failed to load project: {e}")
         return None
 
+def _project_unavailable_warning():
+    """Shown when a project is selected but load_project() returns None.
+
+    load_project() -> Optional[Project] already declares this as a
+    legitimate outcome; every caller must honor it rather than
+    dereferencing .scenes/.title_en on None. Deliberately does not claim
+    a specific cause (e.g. "reset by a redeploy") -- the application can't
+    know that; it can only observe that the data isn't there."""
+    st.warning(
+        "⚠️ Project data could not be loaded. The selected project may no "
+        "longer be available. If this occurred after a deployment, verify "
+        "the application's persistent storage configuration."
+    )
+
 def save_project(project: Project):
     """Save project — PostgreSQL first, file fallback."""
     data = {
@@ -1699,103 +1713,106 @@ with tab_script:
         st.warning("⚠️ Select or create a project first")
     else:
         project = load_project(selected_project)
+        if project is None:
+            _project_unavailable_warning()
+        else:
         
-        st.markdown(f"### {project.title_en} ({project.title_zh})")
+            st.markdown(f"### {project.title_en} ({project.title_zh})")
         
-        st.markdown("""
-        Upload your film script in any format:
-        - 📄 PDF
-        - 📝 Word (.docx)
-        - 📋 Plain text (.txt)
-        - 🎞️ Images (storyboard photos)
-        """)
+            st.markdown("""
+            Upload your film script in any format:
+            - 📄 PDF
+            - 📝 Word (.docx)
+            - 📋 Plain text (.txt)
+            - 🎞️ Images (storyboard photos)
+            """)
         
-        uploaded_file = st.file_uploader(
-            "Choose a script file",
-            type=["pdf", "docx", "txt", "png", "jpg", "jpeg"]
-        )
+            uploaded_file = st.file_uploader(
+                "Choose a script file",
+                type=["pdf", "docx", "txt", "png", "jpg", "jpeg"]
+            )
         
-        if uploaded_file:
-            st.write(f"**File:** {uploaded_file.name}")
+            if uploaded_file:
+                st.write(f"**File:** {uploaded_file.name}")
 
-            # Read bytes once — used for both save and extraction
-            file_bytes = uploaded_file.read()
+                # Read bytes once — used for both save and extraction
+                file_bytes = uploaded_file.read()
 
-            # Save uploaded file
-            script_path = SCRIPTS_DIR / f"{selected_project}_script_{uploaded_file.name}"
-            with open(script_path, "wb") as f:
-                f.write(file_bytes)
+                # Save uploaded file
+                script_path = SCRIPTS_DIR / f"{selected_project}_script_{uploaded_file.name}"
+                with open(script_path, "wb") as f:
+                    f.write(file_bytes)
 
-            st.success(f"✅ File saved: {uploaded_file.name}")
+                st.success(f"✅ File saved: {uploaded_file.name}")
 
-            # Extract text based on file type
-            extracted_text = ""
+                # Extract text based on file type
+                extracted_text = ""
 
-            if uploaded_file.type == "application/pdf":
-                if PYMUPDF_AVAILABLE:
-                    # Staged extraction — user chooses how much to process
-                    extraction_mode = st.radio(
-                        "How much of the script to extract?",
-                        options=["Quick preview (first 3 pages)", "Default (first 10 pages)", "Full script (all pages — slower)"],
-                        index=1,
-                        horizontal=True,
-                        key="extract_mode",
-                    )
-                    if extraction_mode.startswith("Quick"):
-                        pages_limit = 3
-                    elif extraction_mode.startswith("Full"):
-                        pages_limit = 9999
-                        st.warning("⚠️ Full extraction may take 10–30s for long scripts. AI scene parsing will also take longer.")
+                if uploaded_file.type == "application/pdf":
+                    if PYMUPDF_AVAILABLE:
+                        # Staged extraction — user chooses how much to process
+                        extraction_mode = st.radio(
+                            "How much of the script to extract?",
+                            options=["Quick preview (first 3 pages)", "Default (first 10 pages)", "Full script (all pages — slower)"],
+                            index=1,
+                            horizontal=True,
+                            key="extract_mode",
+                        )
+                        if extraction_mode.startswith("Quick"):
+                            pages_limit = 3
+                        elif extraction_mode.startswith("Full"):
+                            pages_limit = 9999
+                            st.warning("⚠️ Full extraction may take 10–30s for long scripts. AI scene parsing will also take longer.")
+                        else:
+                            pages_limit = MAX_PAGES
+
+                        if st.button("Extract Text", key="do_extract"):
+                            progress = st.progress(0)
+                            try:
+                                doc = fitz.open(stream=file_bytes, filetype="pdf")
+                                total = min(len(doc), pages_limit)
+                                pages_text = []
+                                for i, page in enumerate(doc):
+                                    if i >= pages_limit:
+                                        break
+                                    page_text = page.get_text()
+                                    if page_text.strip():
+                                        pages_text.append(page_text)
+                                    progress.progress((i + 1) / max(total, 1))
+                                extracted_text = "\n".join(pages_text)
+                                progress.empty()
+                                st.session_state[f"extracted_{selected_project}"] = extracted_text
+                            except Exception as e:
+                                st.error(f"❌ PDF extraction failed: {e}")
+                        # Use previously extracted text if available
+                        if not extracted_text:
+                            extracted_text = st.session_state.get(f"extracted_{selected_project}", "")
                     else:
-                        pages_limit = MAX_PAGES
+                        # Legacy fallback — slow OCR path
+                        st.info("📄 Processing PDF (slow path — install pymupdf for speed)...")
+                        images, page_paths = extract_pages_from_pdf(str(script_path))
+                        if images:
+                            st.write(f"Extracted {len(images)} pages")
+                            if page_paths:
+                                all_text = []
+                                for page_path in page_paths:
+                                    text = extract_text_from_image(page_path)
+                                    if text:
+                                        all_text.append(text)
+                                extracted_text = "\n".join(all_text)
 
-                    if st.button("Extract Text", key="do_extract"):
-                        progress = st.progress(0)
-                        try:
-                            doc = fitz.open(stream=file_bytes, filetype="pdf")
-                            total = min(len(doc), pages_limit)
-                            pages_text = []
-                            for i, page in enumerate(doc):
-                                if i >= pages_limit:
-                                    break
-                                page_text = page.get_text()
-                                if page_text.strip():
-                                    pages_text.append(page_text)
-                                progress.progress((i + 1) / max(total, 1))
-                            extracted_text = "\n".join(pages_text)
-                            progress.empty()
-                            st.session_state[f"extracted_{selected_project}"] = extracted_text
-                        except Exception as e:
-                            st.error(f"❌ PDF extraction failed: {e}")
-                    # Use previously extracted text if available
-                    if not extracted_text:
-                        extracted_text = st.session_state.get(f"extracted_{selected_project}", "")
-                else:
-                    # Legacy fallback — slow OCR path
-                    st.info("📄 Processing PDF (slow path — install pymupdf for speed)...")
-                    images, page_paths = extract_pages_from_pdf(str(script_path))
-                    if images:
-                        st.write(f"Extracted {len(images)} pages")
-                        if page_paths:
-                            all_text = []
-                            for page_path in page_paths:
-                                text = extract_text_from_image(page_path)
-                                if text:
-                                    all_text.append(text)
-                            extracted_text = "\n".join(all_text)
-
-            elif uploaded_file.type == "text/plain":
-                extracted_text = file_bytes.decode("utf-8")
+                elif uploaded_file.type == "text/plain":
+                    extracted_text = file_bytes.decode("utf-8")
             
-            if extracted_text:
-                st.write(f"**Total extracted: {len(extracted_text)} characters**")
+                if extracted_text:
+                    st.write(f"**Total extracted: {len(extracted_text)} characters**")
                 
-                with st.expander("View extracted text"):
-                    st.text(extracted_text[:1000])
+                    with st.expander("View extracted text"):
+                        st.text(extracted_text[:1000])
                 
-                # Save to project
-                project.script_path = str(script_path)
-                save_project(project)
+                    # Save to project
+                    project.script_path = str(script_path)
+                    save_project(project)
 
 # ===========================================
 # Tab: Scene Breakdown
@@ -1808,166 +1825,169 @@ with tab_scenes:
         st.warning("⚠️ Select a project first")
     else:
         project = load_project(selected_project)
-        
-        if not project.script_path and not project.scenes:
-            st.warning("⚠️ Upload a script first in the 'Script Upload' tab")
+        if project is None:
+            _project_unavailable_warning()
         else:
-            st.markdown(f"### {project.title_en}")
+        
+            if not project.script_path and not project.scenes:
+                st.warning("⚠️ Upload a script first in the 'Script Upload' tab")
+            else:
+                st.markdown(f"### {project.title_en}")
             
-            if project.script_path:
-                if st.button("🔍 Analyze Script → Extract Scenes", type="primary", use_container_width=True):
-                    script_path = Path(project.script_path)
-                    script_text = ""
+                if project.script_path:
+                    if st.button("🔍 Analyze Script → Extract Scenes", type="primary", use_container_width=True):
+                        script_path = Path(project.script_path)
+                        script_text = ""
 
-                    # Step 1: fast text extraction
-                    if script_path.suffix == ".pdf" and PYMUPDF_AVAILABLE:
-                        with st.spinner("Extracting script text..."):
-                            script_text = extract_text_fast(script_path.read_bytes())
-                    elif script_path.suffix == ".pdf":
-                        images, page_paths = extract_pages_from_pdf(str(script_path))
-                        for page_path in page_paths:
-                            script_text += extract_text_from_image(page_path) + "\n"
-                    elif script_path.suffix == ".txt":
-                        script_text = script_path.read_text(encoding="utf-8")
+                        # Step 1: fast text extraction
+                        if script_path.suffix == ".pdf" and PYMUPDF_AVAILABLE:
+                            with st.spinner("Extracting script text..."):
+                                script_text = extract_text_fast(script_path.read_bytes())
+                        elif script_path.suffix == ".pdf":
+                            images, page_paths = extract_pages_from_pdf(str(script_path))
+                            for page_path in page_paths:
+                                script_text += extract_text_from_image(page_path) + "\n"
+                        elif script_path.suffix == ".txt":
+                            script_text = script_path.read_text(encoding="utf-8")
 
-                    if script_text:
-                        preview_slot = None
-                        quick_scenes = list(stream_scenes_from_text(script_text))
-                        if quick_scenes:
-                            st.markdown("*Scene structure detected — enriching with AI...*")
-                            preview_slot = st.empty()
-                            with preview_slot.container():
-                                for qs in quick_scenes[:5]:
-                                    st.caption(f"🎬 {qs['heading']}")
+                        if script_text:
+                            preview_slot = None
+                            quick_scenes = list(stream_scenes_from_text(script_text))
+                            if quick_scenes:
+                                st.markdown("*Scene structure detected — enriching with AI...*")
+                                preview_slot = st.empty()
+                                with preview_slot.container():
+                                    for qs in quick_scenes[:5]:
+                                        st.caption(f"🎬 {qs['heading']}")
 
-                        # Step 3: full GPT enrichment
-                        with st.spinner("Extracting scenes..."):
-                            scenes = parse_script_to_scenes(script_text)
-                            project.scenes = scenes
-                            save_project(project)
-                        if preview_slot:
-                            preview_slot.empty()
-                        st.success(f"✅ {len(scenes)} scenes extracted")
-                    else:
-                        st.error("❌ Could not extract text from script")
-            elif project.scenes:
-                st.success(f"✅ {len(project.scenes)} scenes pre-loaded (demo project)")
+                            # Step 3: full GPT enrichment
+                            with st.spinner("Extracting scenes..."):
+                                scenes = parse_script_to_scenes(script_text)
+                                project.scenes = scenes
+                                save_project(project)
+                            if preview_slot:
+                                preview_slot.empty()
+                            st.success(f"✅ {len(scenes)} scenes extracted")
+                        else:
+                            st.error("❌ Could not extract text from script")
+                elif project.scenes:
+                    st.success(f"✅ {len(project.scenes)} scenes pre-loaded (demo project)")
             
-            # Display scenes
-            if project.scenes:
-                # ── Director Insights Dashboard ───────────────────────────────
-                insights = build_director_insights(project.scenes)
-                if insights:
-                    st.markdown("#### Director Insights")
-                    c1, c2, c3, c4 = st.columns(4)
-                    c1.metric("Scenes", insights['total'])
-                    c2.metric("Pacing", insights['pacing'].title())
-                    c3.metric("Dominant", insights['dominant'])
-                    c4.metric("Weak scenes", insights['weak'])
-                    st.progress(insights['strength'], text=f"Script strength: {int(insights['strength']*100)}%")
-                    # Classification breakdown
-                    if insights['counts']:
-                        breakdown = "  ·  ".join(f"{k}: {v}" for k, v in sorted(insights['counts'].items(), key=lambda x: -x[1]))
-                        st.caption(breakdown)
-                    st.markdown("---")
+                # Display scenes
+                if project.scenes:
+                    # ── Director Insights Dashboard ───────────────────────────────
+                    insights = build_director_insights(project.scenes)
+                    if insights:
+                        st.markdown("#### Director Insights")
+                        c1, c2, c3, c4 = st.columns(4)
+                        c1.metric("Scenes", insights['total'])
+                        c2.metric("Pacing", insights['pacing'].title())
+                        c3.metric("Dominant", insights['dominant'])
+                        c4.metric("Weak scenes", insights['weak'])
+                        st.progress(insights['strength'], text=f"Script strength: {int(insights['strength']*100)}%")
+                        # Classification breakdown
+                        if insights['counts']:
+                            breakdown = "  ·  ".join(f"{k}: {v}" for k, v in sorted(insights['counts'].items(), key=lambda x: -x[1]))
+                            st.caption(breakdown)
+                        st.markdown("---")
 
-                st.write(f"**{len(project.scenes)} scenes**")
+                    st.write(f"**{len(project.scenes)} scenes**")
 
-                for i, scene in enumerate(project.scenes):
-                    # Ensure classification is set (handles scenes loaded from disk before this feature)
-                    if not getattr(scene, 'classification', ''):
-                        scene.classification = classify_scene(scene)
-                    prompts = build_scene_prompts(scene)
-                    issues  = detect_weak_scene(scene)
-                    stype   = prompts.get('scene_type', 'STANDARD')
+                    for i, scene in enumerate(project.scenes):
+                        # Ensure classification is set (handles scenes loaded from disk before this feature)
+                        if not getattr(scene, 'classification', ''):
+                            scene.classification = classify_scene(scene)
+                        prompts = build_scene_prompts(scene)
+                        issues  = detect_weak_scene(scene)
+                        stype   = prompts.get('scene_type', 'STANDARD')
 
-                    type_colors = {'INTERCUT': '#ffcc00', 'FLASHBACK': '#66ccff',
-                                   'MONTAGE': '#ff6699', 'STANDARD': '#666666'}
-                    cls_colors  = {'ACTION': '#ff6644', 'DIALOGUE': '#66aaff',
-                                   'ATMOSPHERIC': '#aaaaaa', 'EMOTIONAL': '#cc88ff',
-                                   'TRANSITION': '#ffcc44', 'EXPOSITION': '#88ccaa'}
+                        type_colors = {'INTERCUT': '#ffcc00', 'FLASHBACK': '#66ccff',
+                                       'MONTAGE': '#ff6699', 'STANDARD': '#666666'}
+                        cls_colors  = {'ACTION': '#ff6644', 'DIALOGUE': '#66aaff',
+                                       'ATMOSPHERIC': '#aaaaaa', 'EMOTIONAL': '#cc88ff',
+                                       'TRANSITION': '#ffcc44', 'EXPOSITION': '#88ccaa'}
 
-                    label = f"Scene {scene.scene_number}: {scene.heading}"
-                    if issues:
-                        label += "  ⚠️"
-
-                    with st.expander(label):
-                        # Badges row
-                        badges = []
-                        if stype != 'STANDARD':
-                            tc = type_colors.get(stype, '#666')
-                            badges.append(f'<span style="background:{tc};color:#000;padding:2px 8px;border-radius:3px;font-size:0.7rem;font-weight:700">{stype}</span>')
-                        cc = cls_colors.get(scene.classification, '#aaa')
-                        badges.append(f'<span style="background:{cc};color:#000;padding:2px 8px;border-radius:3px;font-size:0.7rem;font-weight:700">{scene.classification}</span>')
-                        if badges:
-                            st.markdown(' &nbsp; '.join(badges), unsafe_allow_html=True)
-                            st.write('')
-
-                        col1, col2 = st.columns(2)
-                        with col1:
-                            st.write(f"**Location:** {scene.location or prompts['location']}")
-                            st.write(f"**Time:** {scene.time_of_day}")
-                            st.write(f"**Mood:** {scene.mood or ', '.join(prompts['mood'])}")
-                        with col2:
-                            st.write(f"**Characters:** {', '.join(scene.characters) or 'None'}")
-                            st.write(f"**Keywords:** {', '.join(scene.keywords)}")
-                            st.caption(f"Camera: {prompts['camera']}")
-
-                        st.write("**Action:**")
-                        st.write(scene.action)
-
+                        label = f"Scene {scene.scene_number}: {scene.heading}"
                         if issues:
-                            st.warning(f"Script doctor: {' · '.join(issues)}")
+                            label += "  ⚠️"
 
-                        # Shot list
-                        with st.expander("Shot list", expanded=False):
-                            shot_options = generate_shot_list(scene.classification)
-                            selected_shot = st.radio(
-                                "Select shot to queue for video:",
-                                shot_options,
-                                key=f"shotlist_{i}",
-                                label_visibility="collapsed",
-                            )
-                            if st.button("→ Queue this shot for video", key=f"qshot_{i}"):
-                                st.session_state[f"queued_shot_{scene.scene_id}"] = selected_shot
-                                st.success(f"Queued: {selected_shot}")
+                        with st.expander(label):
+                            # Badges row
+                            badges = []
+                            if stype != 'STANDARD':
+                                tc = type_colors.get(stype, '#666')
+                                badges.append(f'<span style="background:{tc};color:#000;padding:2px 8px;border-radius:3px;font-size:0.7rem;font-weight:700">{stype}</span>')
+                            cc = cls_colors.get(scene.classification, '#aaa')
+                            badges.append(f'<span style="background:{cc};color:#000;padding:2px 8px;border-radius:3px;font-size:0.7rem;font-weight:700">{scene.classification}</span>')
+                            if badges:
+                                st.markdown(' &nbsp; '.join(badges), unsafe_allow_html=True)
+                                st.write('')
 
-                        # Cinematic prompts
-                        with st.expander("Cinematic prompts", expanded=False):
-                            st.text_area("Visual prompt", prompts['visual_prompt'], height=68,
-                                         key=f"vp_{i}", label_visibility="visible")
-                            st.text_area("Video prompt", prompts['video_prompt'], height=68,
-                                         key=f"vvp_{i}", label_visibility="visible")
+                            col1, col2 = st.columns(2)
+                            with col1:
+                                st.write(f"**Location:** {scene.location or prompts['location']}")
+                                st.write(f"**Time:** {scene.time_of_day}")
+                                st.write(f"**Mood:** {scene.mood or ', '.join(prompts['mood'])}")
+                            with col2:
+                                st.write(f"**Characters:** {', '.join(scene.characters) or 'None'}")
+                                st.write(f"**Keywords:** {', '.join(scene.keywords)}")
+                                st.caption(f"Camera: {prompts['camera']}")
 
-                        # AI rewrite
-                        with st.expander("Rewrite with AI", expanded=False):
-                            if not openai_client:
-                                st.warning(f"OpenAI unavailable: {_openai_init_error or 'unknown error'}")
-                            else:
-                                style_choice = st.selectbox(
-                                    "Style",
-                                    options=list(_REWRITE_STYLES.keys()),
-                                    key=f"rwstyle_{i}"
+                            st.write("**Action:**")
+                            st.write(scene.action)
+
+                            if issues:
+                                st.warning(f"Script doctor: {' · '.join(issues)}")
+
+                            # Shot list
+                            with st.expander("Shot list", expanded=False):
+                                shot_options = generate_shot_list(scene.classification)
+                                selected_shot = st.radio(
+                                    "Select shot to queue for video:",
+                                    shot_options,
+                                    key=f"shotlist_{i}",
+                                    label_visibility="collapsed",
                                 )
-                                rw_key = f"rw_result_{scene.scene_id}"
-                                if st.button("Rewrite scene", key=f"rw_{i}"):
-                                    with st.spinner("Rewriting..."):
-                                        st.session_state[rw_key] = rewrite_scene_ai(scene.action, style_choice)
-                                if st.session_state.get(rw_key):
-                                    rewritten = st.session_state[rw_key]
-                                    col_orig, col_new = st.columns(2)
-                                    with col_orig:
-                                        st.caption("Original")
-                                        st.write(scene.action[:600])
-                                    with col_new:
-                                        st.caption(f"{style_choice}")
-                                        st.write(rewritten)
-                                    if st.button("✅ Apply this rewrite", key=f"rw_apply_{i}"):
-                                        scene.action = rewritten
-                                        del st.session_state[rw_key]
-                                        save_project(project)
-                                        st.success("Rewrite saved.")
-                                        st.rerun()
+                                if st.button("→ Queue this shot for video", key=f"qshot_{i}"):
+                                    st.session_state[f"queued_shot_{scene.scene_id}"] = selected_shot
+                                    st.success(f"Queued: {selected_shot}")
+
+                            # Cinematic prompts
+                            with st.expander("Cinematic prompts", expanded=False):
+                                st.text_area("Visual prompt", prompts['visual_prompt'], height=68,
+                                             key=f"vp_{i}", label_visibility="visible")
+                                st.text_area("Video prompt", prompts['video_prompt'], height=68,
+                                             key=f"vvp_{i}", label_visibility="visible")
+
+                            # AI rewrite
+                            with st.expander("Rewrite with AI", expanded=False):
+                                if not openai_client:
+                                    st.warning(f"OpenAI unavailable: {_openai_init_error or 'unknown error'}")
+                                else:
+                                    style_choice = st.selectbox(
+                                        "Style",
+                                        options=list(_REWRITE_STYLES.keys()),
+                                        key=f"rwstyle_{i}"
+                                    )
+                                    rw_key = f"rw_result_{scene.scene_id}"
+                                    if st.button("Rewrite scene", key=f"rw_{i}"):
+                                        with st.spinner("Rewriting..."):
+                                            st.session_state[rw_key] = rewrite_scene_ai(scene.action, style_choice)
+                                    if st.session_state.get(rw_key):
+                                        rewritten = st.session_state[rw_key]
+                                        col_orig, col_new = st.columns(2)
+                                        with col_orig:
+                                            st.caption("Original")
+                                            st.write(scene.action[:600])
+                                        with col_new:
+                                            st.caption(f"{style_choice}")
+                                            st.write(rewritten)
+                                        if st.button("✅ Apply this rewrite", key=f"rw_apply_{i}"):
+                                            scene.action = rewritten
+                                            del st.session_state[rw_key]
+                                            save_project(project)
+                                            st.success("Rewrite saved.")
+                                            st.rerun()
 
 # ===========================================
 # Tab: Concept Images
@@ -2034,171 +2054,174 @@ with tab_concepts:
     else:
         # Force reload project to get latest scenes
         project = load_project(selected_project)
-        
-        if not project.scenes:
-            st.warning("⚠️ Extract scenes first (Scene Breakdown tab)")
+        if project is None:
+            _project_unavailable_warning()
         else:
-            st.markdown(f"### {project.title_en}")
+        
+            if not project.scenes:
+                st.warning("⚠️ Extract scenes first (Scene Breakdown tab)")
+            else:
+                st.markdown(f"### {project.title_en}")
 
-            # ── Controls row ─────────────────────────────────────────
-            c1, c2, c3 = st.columns(3)
-            with c1:
-                visual_direction = st.selectbox(
-                    "🎬 Visual Direction",
-                    ["Natural Realism", "Noir B&W", "Dreamlike",
-                     "Gritty Realism", "Period Film (1940s)", "Poetic Cinema"],
-                )
-            with c2:
-                output_type = st.selectbox(
-                    "🎯 Output Type",
-                    ["Cinematic Frame (for video)", "Storyboard Frame",
-                     "Reference Photography", "Mood Exploration"],
-                )
-            with c3:
-                video_ready = st.checkbox("🎥 Optimize for Video Generation", value=True,
-                    help="Enforces photorealism and natural motion potential — ensures Runway behaves correctly")
+                # ── Controls row ─────────────────────────────────────────
+                c1, c2, c3 = st.columns(3)
+                with c1:
+                    visual_direction = st.selectbox(
+                        "🎬 Visual Direction",
+                        ["Natural Realism", "Noir B&W", "Dreamlike",
+                         "Gritty Realism", "Period Film (1940s)", "Poetic Cinema"],
+                    )
+                with c2:
+                    output_type = st.selectbox(
+                        "🎯 Output Type",
+                        ["Cinematic Frame (for video)", "Storyboard Frame",
+                         "Reference Photography", "Mood Exploration"],
+                    )
+                with c3:
+                    video_ready = st.checkbox("🎥 Optimize for Video Generation", value=True,
+                        help="Enforces photorealism and natural motion potential — ensures Runway behaves correctly")
 
-            # ── Generation Mode ───────────────────────────────────────
-            col_mode, col_info = st.columns([2, 3])
-            with col_mode:
-                image_mode = st.radio(
-                    "Generation Mode",
-                    ["🎬 Cinematic Realism", "🎨 Concept Art"],
-                    horizontal=True,
-                )
-            with col_info:
-                if "Cinematic" in image_mode:
-                    if openai_client:
-                        st.success("🎬 Cinematic mode: DALL-E 3 / gpt-image-1 — photorealistic output")
-                    elif JIMENG_AVAILABLE:
-                        st.success("✅ Byteplus Seedream connected — photorealistic output")
+                # ── Generation Mode ───────────────────────────────────────
+                col_mode, col_info = st.columns([2, 3])
+                with col_mode:
+                    image_mode = st.radio(
+                        "Generation Mode",
+                        ["🎬 Cinematic Realism", "🎨 Concept Art"],
+                        horizontal=True,
+                    )
+                with col_info:
+                    if "Cinematic" in image_mode:
+                        if openai_client:
+                            st.success("🎬 Cinematic mode: DALL-E 3 / gpt-image-1 — photorealistic output")
+                        elif JIMENG_AVAILABLE:
+                            st.success("✅ Byteplus Seedream connected — photorealistic output")
+                        else:
+                            st.warning("⚠️ Add OPENAI_API_KEY or BYTEPLUS_API_KEY")
                     else:
-                        st.warning("⚠️ Add OPENAI_API_KEY or BYTEPLUS_API_KEY")
-                else:
-                    st.info("🎨 Wanxiang — illustrated concept art style")
+                        st.info("🎨 Wanxiang — illustrated concept art style")
 
-            image_gen_mode = "cinematic" if "Cinematic" in image_mode else "concept"
+                image_gen_mode = "cinematic" if "Cinematic" in image_mode else "concept"
 
-            # ── Scene selection ───────────────────────────────────────
-            scene_options = {f"Scene {s.scene_number}: {s.heading}": i for i, s in enumerate(project.scenes)}
-            selected_scenes = st.multiselect("Select scenes", list(scene_options.keys()))
+                # ── Scene selection ───────────────────────────────────────
+                scene_options = {f"Scene {s.scene_number}: {s.heading}": i for i, s in enumerate(project.scenes)}
+                selected_scenes = st.multiselect("Select scenes", list(scene_options.keys()))
 
-            btn_col1, btn_col2 = st.columns(2)
-            with btn_col1:
-                do_generate = st.button("🎨 Generate", type="primary", use_container_width=True)
-            with btn_col2:
-                do_compare = st.button("⚡ Compare Both Models", use_container_width=True,
-                    help="Generate the same scene with Concept Art AND Cinematic Realism side by side")
+                btn_col1, btn_col2 = st.columns(2)
+                with btn_col1:
+                    do_generate = st.button("🎨 Generate", type="primary", use_container_width=True)
+                with btn_col2:
+                    do_compare = st.button("⚡ Compare Both Models", use_container_width=True,
+                        help="Generate the same scene with Concept Art AND Cinematic Realism side by side")
 
-            # ── Helpers ───────────────────────────────────────────────
-            def _img_bytes_from(img_ref: str) -> Optional[bytes]:
-                """Return raw bytes from a data URI or local file path."""
-                import base64 as _b64c
-                if img_ref.startswith("data:image/"):
-                    _, b64data = img_ref.split(",", 1)
-                    return _b64c.b64decode(b64data)
-                p = Path(img_ref)
-                return p.read_bytes() if p.exists() else None
+                # ── Helpers ───────────────────────────────────────────────
+                def _img_bytes_from(img_ref: str) -> Optional[bytes]:
+                    """Return raw bytes from a data URI or local file path."""
+                    import base64 as _b64c
+                    if img_ref.startswith("data:image/"):
+                        _, b64data = img_ref.split(",", 1)
+                        return _b64c.b64decode(b64data)
+                    p = Path(img_ref)
+                    return p.read_bytes() if p.exists() else None
 
-            def _render_concept_card(img_ref: str, scene, key_suffix: str):
-                raw = _img_bytes_from(img_ref)
-                try:
-                    st.image(raw if raw else img_ref, use_container_width=True)
-                except Exception:
-                    st.write("[Image unavailable]")
-                a1, a2, a3 = st.columns(3)
-                with a1:
-                    if raw:
-                        st.download_button("⬇ Save", data=raw,
-                            file_name=f"frame_{key_suffix}.png", mime="image/png",
-                            key=f"dl_{key_suffix}")
-                with a2:
-                    if st.button("🎬 Use as Video Base", key=f"vb_{key_suffix}"):
-                        st.session_state["video_base_scene_id"] = scene.scene_id
-                        st.session_state["video_base_image_path"] = img_ref
-                        st.success("✅ Set as video base — go to Video Generation tab")
-                with a3:
-                    if st.button("↺ Regenerate", key=f"regen_{key_suffix}"):
-                        with st.spinner("Regenerating..."):
-                            new_imgs = generate_concept_images(
+                def _render_concept_card(img_ref: str, scene, key_suffix: str):
+                    raw = _img_bytes_from(img_ref)
+                    try:
+                        st.image(raw if raw else img_ref, use_container_width=True)
+                    except Exception:
+                        st.write("[Image unavailable]")
+                    a1, a2, a3 = st.columns(3)
+                    with a1:
+                        if raw:
+                            st.download_button("⬇ Save", data=raw,
+                                file_name=f"frame_{key_suffix}.png", mime="image/png",
+                                key=f"dl_{key_suffix}")
+                    with a2:
+                        if st.button("🎬 Use as Video Base", key=f"vb_{key_suffix}"):
+                            st.session_state["video_base_scene_id"] = scene.scene_id
+                            st.session_state["video_base_image_path"] = img_ref
+                            st.success("✅ Set as video base — go to Video Generation tab")
+                    with a3:
+                        if st.button("↺ Regenerate", key=f"regen_{key_suffix}"):
+                            with st.spinner("Regenerating..."):
+                                new_imgs = generate_concept_images(
+                                    scene, visual_direction.lower(),
+                                    project_id=project.project_id,
+                                    mode=image_gen_mode,
+                                    output_type=output_type,
+                                    video_ready=video_ready,
+                                )
+                            if new_imgs:
+                                project.concepts[scene.scene_id] = new_imgs
+                                save_project(project)
+                                st.rerun()
+
+                # ── Generate ──────────────────────────────────────────────
+                if (do_generate or do_compare) and not selected_scenes:
+                    st.warning("⚠️ Select at least one scene")
+
+                if do_generate and selected_scenes:
+                    for scene_label in selected_scenes:
+                        scene = project.scenes[scene_options[scene_label]]
+                        st.markdown(f"#### 🎬 {scene.heading}")
+                        with st.spinner(f"Generating..."):
+                            images = generate_concept_images(
                                 scene, visual_direction.lower(),
                                 project_id=project.project_id,
                                 mode=image_gen_mode,
                                 output_type=output_type,
                                 video_ready=video_ready,
                             )
-                        if new_imgs:
-                            project.concepts[scene.scene_id] = new_imgs
+                        if images:
+                            project.concepts[scene.scene_id] = images
                             save_project(project)
-                            st.rerun()
+                            for j, img_path in enumerate(images[:4]):
+                                _render_concept_card(img_path, scene, f"gen_{scene.scene_id}_{j}")
 
-            # ── Generate ──────────────────────────────────────────────
-            if (do_generate or do_compare) and not selected_scenes:
-                st.warning("⚠️ Select at least one scene")
+                if do_compare and selected_scenes:
+                    for scene_label in selected_scenes:
+                        scene = project.scenes[scene_options[scene_label]]
+                        st.markdown(f"#### ⚡ {scene.heading} — Model Comparison")
+                        col_a, col_b = st.columns(2)
+                        with col_a:
+                            st.markdown("**🎨 Concept Art** *(Wanxiang — illustrated)*")
+                            with st.spinner("Concept Art..."):
+                                imgs_concept = generate_concept_images(
+                                    scene, visual_direction.lower(),
+                                    project_id=project.project_id, mode="concept",
+                                    output_type=output_type, video_ready=False,
+                                )
+                            if imgs_concept:
+                                _render_concept_card(imgs_concept[0], scene, f"cmp_concept_{scene.scene_id}")
+                        with col_b:
+                            st.markdown("**🎬 Cinematic Realism** *(photorealistic — video-ready)*")
+                            with st.spinner("Cinematic Realism..."):
+                                imgs_cine = generate_concept_images(
+                                    scene, visual_direction.lower(),
+                                    project_id=project.project_id, mode="cinematic",
+                                    output_type=output_type, video_ready=True,
+                                )
+                            if imgs_cine:
+                                st.success("🎥 Best for video generation")
+                                _render_concept_card(imgs_cine[0], scene, f"cmp_cine_{scene.scene_id}")
+                        # Save cinematic as primary if generated
+                        best = imgs_cine or imgs_concept
+                        if best:
+                            project.concepts[scene.scene_id] = best
+                            save_project(project)
 
-            if do_generate and selected_scenes:
-                for scene_label in selected_scenes:
-                    scene = project.scenes[scene_options[scene_label]]
-                    st.markdown(f"#### 🎬 {scene.heading}")
-                    with st.spinner(f"Generating..."):
-                        images = generate_concept_images(
-                            scene, visual_direction.lower(),
-                            project_id=project.project_id,
-                            mode=image_gen_mode,
-                            output_type=output_type,
-                            video_ready=video_ready,
-                        )
-                    if images:
-                        project.concepts[scene.scene_id] = images
-                        save_project(project)
-                        for j, img_path in enumerate(images[:4]):
-                            _render_concept_card(img_path, scene, f"gen_{scene.scene_id}_{j}")
-
-            if do_compare and selected_scenes:
-                for scene_label in selected_scenes:
-                    scene = project.scenes[scene_options[scene_label]]
-                    st.markdown(f"#### ⚡ {scene.heading} — Model Comparison")
-                    col_a, col_b = st.columns(2)
-                    with col_a:
-                        st.markdown("**🎨 Concept Art** *(Wanxiang — illustrated)*")
-                        with st.spinner("Concept Art..."):
-                            imgs_concept = generate_concept_images(
-                                scene, visual_direction.lower(),
-                                project_id=project.project_id, mode="concept",
-                                output_type=output_type, video_ready=False,
-                            )
-                        if imgs_concept:
-                            _render_concept_card(imgs_concept[0], scene, f"cmp_concept_{scene.scene_id}")
-                    with col_b:
-                        st.markdown("**🎬 Cinematic Realism** *(photorealistic — video-ready)*")
-                        with st.spinner("Cinematic Realism..."):
-                            imgs_cine = generate_concept_images(
-                                scene, visual_direction.lower(),
-                                project_id=project.project_id, mode="cinematic",
-                                output_type=output_type, video_ready=True,
-                            )
-                        if imgs_cine:
-                            st.success("🎥 Best for video generation")
-                            _render_concept_card(imgs_cine[0], scene, f"cmp_cine_{scene.scene_id}")
-                    # Save cinematic as primary if generated
-                    best = imgs_cine or imgs_concept
-                    if best:
-                        project.concepts[scene.scene_id] = best
-                        save_project(project)
-
-            # ── Previously generated ──────────────────────────────────
-            if project.concepts:
-                st.markdown("---")
-                st.markdown("#### Previously Generated Concepts")
-                for scene in project.scenes:
-                    paths = project.concepts.get(scene.scene_id, [])
-                    if not paths:
-                        continue
-                    st.markdown(f"**🎬 {scene.heading}**")
-                    cols = st.columns(min(len(paths), 3))
-                    for j, img_path in enumerate(paths[:3]):
-                        with cols[j]:
-                            _render_concept_card(img_path, scene, f"saved_{scene.scene_id}_{j}")
+                # ── Previously generated ──────────────────────────────────
+                if project.concepts:
+                    st.markdown("---")
+                    st.markdown("#### Previously Generated Concepts")
+                    for scene in project.scenes:
+                        paths = project.concepts.get(scene.scene_id, [])
+                        if not paths:
+                            continue
+                        st.markdown(f"**🎬 {scene.heading}**")
+                        cols = st.columns(min(len(paths), 3))
+                        for j, img_path in enumerate(paths[:3]):
+                            with cols[j]:
+                                _render_concept_card(img_path, scene, f"saved_{scene.scene_id}_{j}")
 
 # ===========================================
 # Tab: Video Generation
@@ -2239,113 +2262,116 @@ with tab_video:
     else:
         # Force reload project to get latest scenes
         project = load_project(selected_project)
-        
-        st.markdown(f"### {project.title_en}")
-        
-        if not project.scenes:
-            st.warning("⚠️ Extract scenes first (Scene Breakdown tab)")
+        if project is None:
+            _project_unavailable_warning()
         else:
-            # Convert scenes to format for video generation
-            def _concept_for_runway(scene_id: str) -> Optional[str]:
-                """Return data:image/... URI for Runway API, or None if unavailable."""
-                paths = project.concepts.get(scene_id, [])
-                if not paths:
-                    return None
-                path = paths[0]
-                if not path:
-                    return None
-                # Already a data URI (new storage format)
-                if path.startswith("data:image/"):
-                    return path
-                # https:// URL — pass directly
-                if path.startswith("https://"):
-                    return path
-                # Legacy local file path — encode if still exists
-                p = Path(path)
-                if p.exists():
-                    import base64
-                    return "data:image/png;base64," + base64.b64encode(p.read_bytes()).decode()
-                return None
-
-            scenes_for_video = [
-                {
-                    "id": scene.scene_id,
-                    "heading": scene.heading,
-                    "prompt": f"{scene.heading}. Location: {scene.location}. Time: {scene.time_of_day}. Mood: {scene.mood}. Action: {scene.action[:100]}",
-                    "concept_image": _concept_for_runway(scene.scene_id),
-                    # concept_image_path is only used for local file display; data URIs go via concept_image
-                    "concept_image_path": None,
-                }
-                for scene in project.scenes
-            ]
-            
-            provider_choice = st.radio(
-                "Video provider",
-                ["Runway", "MiniMax H3"],
-                horizontal=True,
-                key="video_provider_choice",
-            )
-
-            if provider_choice == "Runway":
-                try:
-                    import importlib, sys as _sys
-                    if 'runway_video_ui' in _sys.modules:
-                        importlib.reload(_sys.modules['runway_video_ui'])
-                    from runway_video_ui import display_video_generation_tab
-                    display_video_generation_tab(scenes_for_video, project.title_en)
-                except Exception as _video_err:
-                    st.error(f"⚠️ Video module error: {_video_err}")
-                    st.markdown("---")
-                
-                    # Demo fallback: let directors preview workflow without API
-                    st.markdown("#### 🎬 Video Generation Preview (Demo Mode)")
-                    st.info("This demo shows the video generation workflow. Connect Runway API keys to generate real videos.")
-                
-                    # Scene selector
-                    scene_names = [s["heading"] for s in scenes_for_video]
-                    selected_scene = st.selectbox("🎬 Select Scene", scene_names, key="demo_video_scene")
-                    scene_data = scenes_for_video[scene_names.index(selected_scene)]
-                
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        shot_type = st.selectbox("📹 Shot Type", [
-                            "Wide Shot", "Medium Shot", "Close-Up", 
-                            "Dolly In", "Pan Left", "Orbit", "Push In"
-                        ], key="demo_shot_type")
-                    with col2:
-                        duration = st.slider("⏱️ Duration (seconds)", 3, 15, 5, key="demo_duration")
-                
-                    st.text_area("🎯 Scene Prompt", scene_data["prompt"], height=80, key="demo_prompt")
-                
-                    if st.button("🎥 Generate Demo Video", type="primary", use_container_width=True, key="demo_gen"):
-                        with st.spinner("🎬 Generating preview..."):
-                            import time
-                            progress = st.progress(0)
-                            for i in range(100):
-                                time.sleep(0.02)
-                                progress.progress(i + 1)
-                        
-                            st.success("✅ Demo video generated!")
-                            st.markdown(f"""
-                            **Scene:** {selected_scene}  
-                            **Shot:** {shot_type}  
-                            **Duration:** {duration}s  
-                        
-                            🎬 *In production mode, Runway Gen-4.5 would generate a cinematic video clip here.*  
-                            *To enable: add `RUNWAY_API_KEY` to your Railway environment variables.*
-                            """)
-                        
-                            # Show a placeholder with scene info
-                            st.markdown("---")
-                            st.markdown("##### 📋 Shot List Generated")
-                            for i, s in enumerate(scenes_for_video[:5], 1):
-                                st.write(f"**Shot {i}:** {s['heading']}")
+        
+            st.markdown(f"### {project.title_en}")
+        
+            if not project.scenes:
+                st.warning("⚠️ Extract scenes first (Scene Breakdown tab)")
             else:
-                try:
-                    from minimax_h3_ui import display_minimax_h3_tab
-                    display_minimax_h3_tab(scenes_for_video, project.title_en)
-                except Exception as _mmh3_err:
-                    st.error(f"⚠️ MiniMax H3 module error: {_mmh3_err}")
+                # Convert scenes to format for video generation
+                def _concept_for_runway(scene_id: str) -> Optional[str]:
+                    """Return data:image/... URI for Runway API, or None if unavailable."""
+                    paths = project.concepts.get(scene_id, [])
+                    if not paths:
+                        return None
+                    path = paths[0]
+                    if not path:
+                        return None
+                    # Already a data URI (new storage format)
+                    if path.startswith("data:image/"):
+                        return path
+                    # https:// URL — pass directly
+                    if path.startswith("https://"):
+                        return path
+                    # Legacy local file path — encode if still exists
+                    p = Path(path)
+                    if p.exists():
+                        import base64
+                        return "data:image/png;base64," + base64.b64encode(p.read_bytes()).decode()
+                    return None
+
+                scenes_for_video = [
+                    {
+                        "id": scene.scene_id,
+                        "heading": scene.heading,
+                        "prompt": f"{scene.heading}. Location: {scene.location}. Time: {scene.time_of_day}. Mood: {scene.mood}. Action: {scene.action[:100]}",
+                        "concept_image": _concept_for_runway(scene.scene_id),
+                        # concept_image_path is only used for local file display; data URIs go via concept_image
+                        "concept_image_path": None,
+                    }
+                    for scene in project.scenes
+                ]
+            
+                provider_choice = st.radio(
+                    "Video provider",
+                    ["Runway", "MiniMax H3"],
+                    horizontal=True,
+                    key="video_provider_choice",
+                )
+
+                if provider_choice == "Runway":
+                    try:
+                        import importlib, sys as _sys
+                        if 'runway_video_ui' in _sys.modules:
+                            importlib.reload(_sys.modules['runway_video_ui'])
+                        from runway_video_ui import display_video_generation_tab
+                        display_video_generation_tab(scenes_for_video, project.title_en)
+                    except Exception as _video_err:
+                        st.error(f"⚠️ Video module error: {_video_err}")
+                        st.markdown("---")
+                
+                        # Demo fallback: let directors preview workflow without API
+                        st.markdown("#### 🎬 Video Generation Preview (Demo Mode)")
+                        st.info("This demo shows the video generation workflow. Connect Runway API keys to generate real videos.")
+                
+                        # Scene selector
+                        scene_names = [s["heading"] for s in scenes_for_video]
+                        selected_scene = st.selectbox("🎬 Select Scene", scene_names, key="demo_video_scene")
+                        scene_data = scenes_for_video[scene_names.index(selected_scene)]
+                
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            shot_type = st.selectbox("📹 Shot Type", [
+                                "Wide Shot", "Medium Shot", "Close-Up", 
+                                "Dolly In", "Pan Left", "Orbit", "Push In"
+                            ], key="demo_shot_type")
+                        with col2:
+                            duration = st.slider("⏱️ Duration (seconds)", 3, 15, 5, key="demo_duration")
+                
+                        st.text_area("🎯 Scene Prompt", scene_data["prompt"], height=80, key="demo_prompt")
+                
+                        if st.button("🎥 Generate Demo Video", type="primary", use_container_width=True, key="demo_gen"):
+                            with st.spinner("🎬 Generating preview..."):
+                                import time
+                                progress = st.progress(0)
+                                for i in range(100):
+                                    time.sleep(0.02)
+                                    progress.progress(i + 1)
+                        
+                                st.success("✅ Demo video generated!")
+                                st.markdown(f"""
+                                **Scene:** {selected_scene}  
+                                **Shot:** {shot_type}  
+                                **Duration:** {duration}s  
+                        
+                                🎬 *In production mode, Runway Gen-4.5 would generate a cinematic video clip here.*  
+                                *To enable: add `RUNWAY_API_KEY` to your Railway environment variables.*
+                                """)
+                        
+                                # Show a placeholder with scene info
+                                st.markdown("---")
+                                st.markdown("##### 📋 Shot List Generated")
+                                for i, s in enumerate(scenes_for_video[:5], 1):
+                                    st.write(f"**Shot {i}:** {s['heading']}")
+                else:
+                    try:
+                        from minimax_h3_ui import display_minimax_h3_tab
+                        display_minimax_h3_tab(scenes_for_video, project.title_en)
+                    except Exception as _mmh3_err:
+                        st.error(f"⚠️ MiniMax H3 module error: {_mmh3_err}")
 
 # ===========================================
 # Tab: Characters (GWM-1 Avatars)
@@ -2360,38 +2386,41 @@ with tab_characters:
             st.warning("⚠️ Select a project first")
         else:
             project = load_project(selected_project)
+            if project is None:
+                _project_unavailable_warning()
+            else:
             
-            # Character planning even without Runway
-            st.markdown("#### 📝 Character Profiles")
+                # Character planning even without Runway
+                st.markdown("#### 📝 Character Profiles")
             
-            char_name = st.text_input("Character Name", key="demo_char_name")
-            char_role = st.selectbox("Role", ["Protagonist", "Antagonist", "Supporting", "Minor"], key="demo_char_role")
-            char_desc = st.text_area("Description", placeholder="Physical appearance, personality, motivation...", key="demo_char_desc")
+                char_name = st.text_input("Character Name", key="demo_char_name")
+                char_role = st.selectbox("Role", ["Protagonist", "Antagonist", "Supporting", "Minor"], key="demo_char_role")
+                char_desc = st.text_area("Description", placeholder="Physical appearance, personality, motivation...", key="demo_char_desc")
             
-            col1, col2 = st.columns(2)
-            with col1:
-                char_age = st.text_input("Age", key="demo_char_age")
-            with col2:
-                char_trait = st.text_input("Key Trait", key="demo_char_trait")
+                col1, col2 = st.columns(2)
+                with col1:
+                    char_age = st.text_input("Age", key="demo_char_age")
+                with col2:
+                    char_trait = st.text_input("Key Trait", key="demo_char_trait")
             
-            if st.button("💾 Save Character Profile", type="primary", key="demo_save_char"):
-                if char_name:
-                    st.success(f"✅ Character '{char_name}' saved to project")
-                else:
-                    st.warning("Enter a character name")
+                if st.button("💾 Save Character Profile", type="primary", key="demo_save_char"):
+                    if char_name:
+                        st.success(f"✅ Character '{char_name}' saved to project")
+                    else:
+                        st.warning("Enter a character name")
             
-            # Show existing characters from scenes
-            if project.scenes:
-                st.markdown("---")
-                st.markdown("#### 🎬 Characters Found in Script")
-                all_chars = set()
-                for scene in project.scenes:
-                    all_chars.update(scene.characters)
-                if all_chars:
-                    for char in sorted(all_chars):
-                        st.write(f"• **{char}**")
-                else:
-                    st.write("No characters extracted yet. Run Scene Breakdown first.")
+                # Show existing characters from scenes
+                if project.scenes:
+                    st.markdown("---")
+                    st.markdown("#### 🎬 Characters Found in Script")
+                    all_chars = set()
+                    for scene in project.scenes:
+                        all_chars.update(scene.characters)
+                    if all_chars:
+                        for char in sorted(all_chars):
+                            st.write(f"• **{char}**")
+                    else:
+                        st.write("No characters extracted yet. Run Scene Breakdown first.")
     else:
         # Character creation and management
         char_tab1, char_tab2 = st.tabs(["Create Character", "Manage Characters"])
@@ -2412,53 +2441,56 @@ with tab_storyboard:
         st.warning("⚠️ Select a project first")
     else:
         project = load_project(selected_project)
-        
-        st.markdown(f"### {project.title_en}")
-        
-        if not project.scenes:
-            st.warning("⚠️ Extract scenes first (Scene Breakdown tab)")
+        if project is None:
+            _project_unavailable_warning()
         else:
-            # Scene selector
-            scene_options = {f"Scene {s.scene_number}: {s.heading}": i for i, s in enumerate(project.scenes)}
-            selected_scene_name = st.selectbox("🎬 Select Scene", list(scene_options.keys()), key="storyboard_scene")
-            scene_idx = scene_options[selected_scene_name]
-            scene = project.scenes[scene_idx]
+        
+            st.markdown(f"### {project.title_en}")
+        
+            if not project.scenes:
+                st.warning("⚠️ Extract scenes first (Scene Breakdown tab)")
+            else:
+                # Scene selector
+                scene_options = {f"Scene {s.scene_number}: {s.heading}": i for i, s in enumerate(project.scenes)}
+                selected_scene_name = st.selectbox("🎬 Select Scene", list(scene_options.keys()), key="storyboard_scene")
+                scene_idx = scene_options[selected_scene_name]
+                scene = project.scenes[scene_idx]
             
-            # Build scene dict for storyboard generator
-            scene_dict = {
-                "scene_number": scene.scene_number,
-                "heading": scene.heading,
-                "location": scene.location,
-                "time_of_day": scene.time_of_day,
-                "characters": scene.characters,
-                "mood": scene.mood,
-                "action": scene.action,
-                "visual_prompt": f"{scene.heading}. {scene.location}, {scene.time_of_day}. Mood: {scene.mood}. {scene.action[:200]}",
-                "video_prompt": f"Cinematic scene: {scene.heading}, {scene.mood} atmosphere"
-            }
+                # Build scene dict for storyboard generator
+                scene_dict = {
+                    "scene_number": scene.scene_number,
+                    "heading": scene.heading,
+                    "location": scene.location,
+                    "time_of_day": scene.time_of_day,
+                    "characters": scene.characters,
+                    "mood": scene.mood,
+                    "action": scene.action,
+                    "visual_prompt": f"{scene.heading}. {scene.location}, {scene.time_of_day}. Mood: {scene.mood}. {scene.action[:200]}",
+                    "video_prompt": f"Cinematic scene: {scene.heading}, {scene.mood} atmosphere"
+                }
             
-            try:
-                display_storyboard_ui(
-                    scene=scene_dict,
-                    generate_image_func=None,
-                    title="🎬 Storyboard Builder"
-                )
-            except Exception as e:
-                st.error(f"Storyboard module error: {e}")
-                st.info("Falling back to basic storyboard view...")
+                try:
+                    display_storyboard_ui(
+                        scene=scene_dict,
+                        generate_image_func=None,
+                        title="🎬 Storyboard Builder"
+                    )
+                except Exception as e:
+                    st.error(f"Storyboard module error: {e}")
+                    st.info("Falling back to basic storyboard view...")
                 
-                layout = st.selectbox("Choose layout", ["6-panel", "8-panel", "12-panel scroll"])
-                st.info(f"📋 Assembling storyboard with {layout} layout...")
+                    layout = st.selectbox("Choose layout", ["6-panel", "8-panel", "12-panel scroll"])
+                    st.info(f"📋 Assembling storyboard with {layout} layout...")
             
-            # PDF Export
-            st.markdown("---")
-            st.markdown("#### 📄 Export Storyboard PDF")
-            try:
-                settings = create_pdf_export_settings()
-                if st.button("📥 Export Storyboard PDF", type="primary", key="export_storyboard_pdf"):
-                    display_pdf_export_ui(project, settings)
-            except Exception as e:
-                st.info(f"PDF export not available: {e}")
+                # PDF Export
+                st.markdown("---")
+                st.markdown("#### 📄 Export Storyboard PDF")
+                try:
+                    settings = create_pdf_export_settings()
+                    if st.button("📥 Export Storyboard PDF", type="primary", key="export_storyboard_pdf"):
+                        display_pdf_export_ui(project, settings)
+                except Exception as e:
+                    st.info(f"PDF export not available: {e}")
 
 # ===========================================
 # Tab: Locations
@@ -2471,136 +2503,139 @@ with tab_locations:
         st.warning("⚠️ Select a project first")
     else:
         project = load_project(selected_project)
-        
-        if not PLACES_AVAILABLE:
-            st.error("❌ Google Places module not available")
+        if project is None:
+            _project_unavailable_warning()
         else:
-            google_api_key = os.getenv("GOOGLE_PLACES_API_KEY")
+        
+            if not PLACES_AVAILABLE:
+                st.error("❌ Google Places module not available")
+            else:
+                google_api_key = os.getenv("GOOGLE_PLACES_API_KEY")
             
-            if not google_api_key:
-                st.warning("⚠️ Google Places API key not configured")
-                google_api_key = st.text_input("Enter Google Places API Key", type="password", key="gplaces_key")
+                if not google_api_key:
+                    st.warning("⚠️ Google Places API key not configured")
+                    google_api_key = st.text_input("Enter Google Places API Key", type="password", key="gplaces_key")
+                    if google_api_key:
+                        os.environ["GOOGLE_PLACES_API_KEY"] = google_api_key
+            
                 if google_api_key:
-                    os.environ["GOOGLE_PLACES_API_KEY"] = google_api_key
-            
-            if google_api_key:
-                agent = GooglePlacesAgent(google_api_key)
+                    agent = GooglePlacesAgent(google_api_key)
                 
-                st.markdown(f"### {project.title_en}")
+                    st.markdown(f"### {project.title_en}")
                 
-                # Two modes: search from scenes or free search
-                location_mode = st.radio(
-                    "Search mode",
-                    ["🎬 From Scene Locations", "🔍 Free Search"],
-                    horizontal=True,
-                    key="loc_mode"
-                )
-                
-                if location_mode == "🎬 From Scene Locations" and project.scenes:
-                    st.markdown("---")
-                    st.markdown("Select a scene to find real-world filming locations that match:")
-                    
-                    scene_options = {
-                        f"Scene {s.scene_number}: {s.heading} — 📍 {s.location}": i 
-                        for i, s in enumerate(project.scenes)
-                    }
-                    selected_scene_name = st.selectbox(
-                        "🎬 Select Scene", 
-                        list(scene_options.keys()), 
-                        key="loc_scene_select"
+                    # Two modes: search from scenes or free search
+                    location_mode = st.radio(
+                        "Search mode",
+                        ["🎬 From Scene Locations", "🔍 Free Search"],
+                        horizontal=True,
+                        key="loc_mode"
                     )
-                    scene_idx = scene_options[selected_scene_name]
-                    scene = project.scenes[scene_idx]
+                
+                    if location_mode == "🎬 From Scene Locations" and project.scenes:
+                        st.markdown("---")
+                        st.markdown("Select a scene to find real-world filming locations that match:")
                     
-                    # Show scene info
-                    col1, col2, col3 = st.columns(3)
-                    with col1:
-                        st.markdown(f"**Location:** {scene.location}")
-                    with col2:
-                        st.markdown(f"**Time:** {scene.time_of_day}")
-                    with col3:
-                        st.markdown(f"**Mood:** {scene.mood}")
+                        scene_options = {
+                            f"Scene {s.scene_number}: {s.heading} — 📍 {s.location}": i 
+                            for i, s in enumerate(project.scenes)
+                        }
+                        selected_scene_name = st.selectbox(
+                            "🎬 Select Scene", 
+                            list(scene_options.keys()), 
+                            key="loc_scene_select"
+                        )
+                        scene_idx = scene_options[selected_scene_name]
+                        scene = project.scenes[scene_idx]
                     
-                    # Allow editing the search query
-                    search_query = st.text_input(
-                        "🔍 Search query (edit to refine)",
-                        value=f"{scene.location} filming location",
-                        key="loc_scene_query"
-                    )
+                        # Show scene info
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            st.markdown(f"**Location:** {scene.location}")
+                        with col2:
+                            st.markdown(f"**Time:** {scene.time_of_day}")
+                        with col3:
+                            st.markdown(f"**Mood:** {scene.mood}")
                     
-                    if st.button("🌍 Scout Locations", type="primary", use_container_width=True, key="loc_scout_btn"):
-                        with st.spinner("🔍 Searching for locations..."):
-                            results = agent.search_locations(search_query, max_results=6)
+                        # Allow editing the search query
+                        search_query = st.text_input(
+                            "🔍 Search query (edit to refine)",
+                            value=f"{scene.location} filming location",
+                            key="loc_scene_query"
+                        )
+                    
+                        if st.button("🌍 Scout Locations", type="primary", use_container_width=True, key="loc_scout_btn"):
+                            with st.spinner("🔍 Searching for locations..."):
+                                results = agent.search_locations(search_query, max_results=6)
                             
-                            if results:
-                                st.success(f"✅ Found {len(results)} locations")
+                                if results:
+                                    st.success(f"✅ Found {len(results)} locations")
                                 
-                                for i, loc in enumerate(results):
-                                    with st.expander(f"📍 {loc['name']} — ⭐ {loc.get('rating', 'N/A')}"):
-                                        st.markdown(f"**Address:** {loc['address']}")
+                                    for i, loc in enumerate(results):
+                                        with st.expander(f"📍 {loc['name']} — ⭐ {loc.get('rating', 'N/A')}"):
+                                            st.markdown(f"**Address:** {loc['address']}")
                                         
-                                        if loc.get('rating'):
-                                            st.markdown(f"**Rating:** ⭐ {loc['rating']} ({loc.get('user_ratings_total', 0)} reviews)")
+                                            if loc.get('rating'):
+                                                st.markdown(f"**Rating:** ⭐ {loc['rating']} ({loc.get('user_ratings_total', 0)} reviews)")
                                         
-                                        st.markdown(f"**Coordinates:** {loc['lat']:.4f}, {loc['lng']:.4f}")
+                                            st.markdown(f"**Coordinates:** {loc['lat']:.4f}, {loc['lng']:.4f}")
                                         
-                                        # Show photos
-                                        if loc.get("photo_refs"):
-                                            photo_cols = st.columns(min(len(loc["photo_refs"]), 3))
-                                            for j, ref in enumerate(loc["photo_refs"][:3]):
-                                                photo_url = agent.get_photo_url(ref)
-                                                if photo_url:
-                                                    with photo_cols[j]:
-                                                        st.image(photo_url, use_container_width=True)
+                                            # Show photos
+                                            if loc.get("photo_refs"):
+                                                photo_cols = st.columns(min(len(loc["photo_refs"]), 3))
+                                                for j, ref in enumerate(loc["photo_refs"][:3]):
+                                                    photo_url = agent.get_photo_url(ref)
+                                                    if photo_url:
+                                                        with photo_cols[j]:
+                                                            st.image(photo_url, use_container_width=True)
                                         
-                                        # Google Maps link
-                                        maps_url = f"https://www.google.com/maps/place/?q=place_id:{loc['place_id']}"
-                                        st.markdown(f"[🗺️ Open in Google Maps]({maps_url})")
-                            else:
-                                st.warning("No locations found. Try a different search query.")
+                                            # Google Maps link
+                                            maps_url = f"https://www.google.com/maps/place/?q=place_id:{loc['place_id']}"
+                                            st.markdown(f"[🗺️ Open in Google Maps]({maps_url})")
+                                else:
+                                    st.warning("No locations found. Try a different search query.")
                 
-                elif location_mode == "🎬 From Scene Locations" and not project.scenes:
-                    st.info("Load scenes first (Scene Breakdown tab) to search by scene location.")
+                    elif location_mode == "🎬 From Scene Locations" and not project.scenes:
+                        st.info("Load scenes first (Scene Breakdown tab) to search by scene location.")
                 
-                else:
-                    # Free search mode
-                    st.markdown("---")
-                    st.markdown("Search for any filming location worldwide:")
+                    else:
+                        # Free search mode
+                        st.markdown("---")
+                        st.markdown("Search for any filming location worldwide:")
                     
-                    search_query = st.text_input(
-                        "🔍 Search",
-                        placeholder="e.g., abandoned tram station Europe, neon alley Tokyo, misty mountain village",
-                        key="loc_free_query"
-                    )
+                        search_query = st.text_input(
+                            "🔍 Search",
+                            placeholder="e.g., abandoned tram station Europe, neon alley Tokyo, misty mountain village",
+                            key="loc_free_query"
+                        )
                     
-                    if search_query and st.button("🌍 Search", type="primary", use_container_width=True, key="loc_free_btn"):
-                        with st.spinner("🔍 Searching..."):
-                            results = agent.search_locations(search_query, max_results=6)
+                        if search_query and st.button("🌍 Search", type="primary", use_container_width=True, key="loc_free_btn"):
+                            with st.spinner("🔍 Searching..."):
+                                results = agent.search_locations(search_query, max_results=6)
                             
-                            if results:
-                                st.success(f"✅ Found {len(results)} locations")
+                                if results:
+                                    st.success(f"✅ Found {len(results)} locations")
                                 
-                                for i, loc in enumerate(results):
-                                    with st.expander(f"📍 {loc['name']} — ⭐ {loc.get('rating', 'N/A')}"):
-                                        st.markdown(f"**Address:** {loc['address']}")
+                                    for i, loc in enumerate(results):
+                                        with st.expander(f"📍 {loc['name']} — ⭐ {loc.get('rating', 'N/A')}"):
+                                            st.markdown(f"**Address:** {loc['address']}")
                                         
-                                        if loc.get('rating'):
-                                            st.markdown(f"**Rating:** ⭐ {loc['rating']} ({loc.get('user_ratings_total', 0)} reviews)")
+                                            if loc.get('rating'):
+                                                st.markdown(f"**Rating:** ⭐ {loc['rating']} ({loc.get('user_ratings_total', 0)} reviews)")
                                         
-                                        st.markdown(f"**Coordinates:** {loc['lat']:.4f}, {loc['lng']:.4f}")
+                                            st.markdown(f"**Coordinates:** {loc['lat']:.4f}, {loc['lng']:.4f}")
                                         
-                                        if loc.get("photo_refs"):
-                                            photo_cols = st.columns(min(len(loc["photo_refs"]), 3))
-                                            for j, ref in enumerate(loc["photo_refs"][:3]):
-                                                photo_url = agent.get_photo_url(ref)
-                                                if photo_url:
-                                                    with photo_cols[j]:
-                                                        st.image(photo_url, use_container_width=True)
+                                            if loc.get("photo_refs"):
+                                                photo_cols = st.columns(min(len(loc["photo_refs"]), 3))
+                                                for j, ref in enumerate(loc["photo_refs"][:3]):
+                                                    photo_url = agent.get_photo_url(ref)
+                                                    if photo_url:
+                                                        with photo_cols[j]:
+                                                            st.image(photo_url, use_container_width=True)
                                         
-                                        maps_url = f"https://www.google.com/maps/place/?q=place_id:{loc['place_id']}"
-                                        st.markdown(f"[🗺️ Open in Google Maps]({maps_url})")
-                            else:
-                                st.warning("No locations found. Try a different search.")
+                                            maps_url = f"https://www.google.com/maps/place/?q=place_id:{loc['place_id']}"
+                                            st.markdown(f"[🗺️ Open in Google Maps]({maps_url})")
+                                else:
+                                    st.warning("No locations found. Try a different search.")
 
 # ===========================================
 # Tab: Export
@@ -2613,25 +2648,28 @@ with tab_exports:
         st.warning("⚠️ Select a project first")
     else:
         project = load_project(selected_project)
+        if project is None:
+            _project_unavailable_warning()
+        else:
         
-        st.markdown(f"### {project.title_en}")
+            st.markdown(f"### {project.title_en}")
         
-        st.write("**Available Exports:**")
+            st.write("**Available Exports:**")
         
-        export_options = []
-        if project.scenes:
-            export_options.append("Scene Breakdown (PDF)")
-        if project.concepts:
-            export_options.append("Concept Album (PDF)")
-        if project.scenes and project.concepts:
-            export_options.append("Pitch Deck (PPTX)")
-            export_options.append("Storyboard Scroll (PNG)")
+            export_options = []
+            if project.scenes:
+                export_options.append("Scene Breakdown (PDF)")
+            if project.concepts:
+                export_options.append("Concept Album (PDF)")
+            if project.scenes and project.concepts:
+                export_options.append("Pitch Deck (PPTX)")
+                export_options.append("Storyboard Scroll (PNG)")
         
-        selected_export = st.multiselect("Choose exports", export_options)
+            selected_export = st.multiselect("Choose exports", export_options)
         
-        if st.button("📥 Prepare Exports", type="primary", use_container_width=True):
-            st.info("📦 Preparing export package...")
-            st.success("✅ Ready for download (coming soon)")
+            if st.button("📥 Prepare Exports", type="primary", use_container_width=True):
+                st.info("📦 Preparing export package...")
+                st.success("✅ Ready for download (coming soon)")
 
 # ===========================================
 # Tab: Localization
