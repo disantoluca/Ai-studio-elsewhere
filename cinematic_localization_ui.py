@@ -4,20 +4,13 @@ Cinematic Localization UI
 Streamlit interface for the six-stage localization pipeline.
 """
 
-import sys
 import os
-from pathlib import Path
 from typing import List, Optional
 
 import streamlit as st
 
-# Ensure agents directory is on path
-_AGENTS_DIR = Path(__file__).parent / "agents"
-if str(_AGENTS_DIR) not in sys.path:
-    sys.path.insert(0, str(_AGENTS_DIR))
-
 try:
-    from cinematic_localization_agent import (
+    from agents.cinematic_localization_agent import (
         LocalizationMemory,
         LocalizationBible,
         LocalizationOrchestrator,

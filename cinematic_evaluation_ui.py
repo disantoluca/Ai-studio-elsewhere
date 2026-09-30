@@ -11,19 +11,13 @@ Four sections:
 """
 
 import json
-import sys
 import os
-from pathlib import Path
 from typing import List, Optional
 
 import streamlit as st
 
-_AGENTS_DIR = Path(__file__).parent / "agents"
-if str(_AGENTS_DIR) not in sys.path:
-    sys.path.insert(0, str(_AGENTS_DIR))
-
 try:
-    from localization_evaluator import (
+    from agents.localization_evaluator import (
         EvalCase,
         EvalResult,
         DimensionScores,
@@ -34,7 +28,7 @@ try:
         _get_pipeline_version,
         PIPELINE_AVAILABLE,
     )
-    from cinematic_localization_agent import (
+    from agents.cinematic_localization_agent import (
         LocalizationOrchestrator,
         LocalizationBible,
         LocalizationMemory,
