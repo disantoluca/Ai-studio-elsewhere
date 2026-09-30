@@ -221,6 +221,16 @@ def display_minimax_h3_tab(scenes: List[Dict], project_title: str):
                 type=["png", "jpg", "jpeg", "webp"],
                 accept_multiple_files=True,
                 key="mmh3_upload_multi",
+                help=(
+                    f"Select several images at once (⌘/Ctrl-click in the file picker, "
+                    f"or drag multiple files onto this box). Up to {MAX_REFERENCE_IMAGES} "
+                    f"images total — you can also click the '+' after your first upload "
+                    f"to add more."
+                ),
+            )
+            st.caption(
+                f"💡 Select multiple images at once (⌘/Ctrl-click in the file picker), or "
+                f"upload one then click **+** to add more — up to {MAX_REFERENCE_IMAGES} total."
             )
             if uploaded_files:
                 if len(uploaded_files) > MAX_REFERENCE_IMAGES:
