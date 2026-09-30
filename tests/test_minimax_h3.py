@@ -712,5 +712,73 @@ class TestMultiImageReferenceUpload(unittest.TestCase):
         self.assertAlmostEqual(cost.total_usd, (0.08 * 6) + 0.04)
 
 
+class TestShotLabel(unittest.TestCase):
+    """shot_label (2026-09-30) is display-only provenance metadata for
+    telling generations apart in a multi-shot sequence. task_id remains
+    the real technical identity underneath — shot_label never affects
+    correctness, only display."""
+
+    @patch("minimax_h3_agent.time.sleep", return_value=None)
+    @patch("minimax_h3_agent.requests.get")
+    @patch("minimax_h3_agent.requests.post")
+    def test_labeled_generation_records_the_label(self, mock_post, mock_get, mock_sleep):
+        mock_post.return_value = _resp(200, {"task_id": "t1"})
+        mock_get.return_value = _resp(200, {"task": {"status": "succeeded", "content": {"url": "https://cdn/out.mp4"}}})
+
+        agent = mmh3.MiniMaxH3Agent(api_key="test-key")
+        record = agent.generate_video(
+            mmh3.VideoGenRequest(prompt="ok"), shot_label="Shot 02 — Gather & Rise"
+        )
+        self.assertEqual(record.shot_label, "Shot 02 — Gather & Rise")
+        self.assertEqual(record.status, "succeeded")
+
+    @patch("minimax_h3_agent.time.sleep", return_value=None)
+    @patch("minimax_h3_agent.requests.get")
+    @patch("minimax_h3_agent.requests.post")
+    def test_unlabeled_generation_defaults_to_none(self, mock_post, mock_get, mock_sleep):
+        mock_post.return_value = _resp(200, {"task_id": "t2"})
+        mock_get.return_value = _resp(200, {"task": {"status": "succeeded", "content": {"url": "https://cdn/out.mp4"}}})
+
+        agent = mmh3.MiniMaxH3Agent(api_key="test-key")
+        record = agent.generate_video(mmh3.VideoGenRequest(prompt="ok"))  # no shot_label passed
+        self.assertIsNone(record.shot_label)
+
+    def test_empty_string_label_normalizes_to_none(self):
+        agent = mmh3.MiniMaxH3Agent(api_key="test-key")
+        record = agent.generate_video(mmh3.VideoGenRequest(prompt="ok"), shot_label="")
+        self.assertIsNone(record.shot_label)
+
+    @patch("minimax_h3_agent.requests.post")
+    def test_shot_label_never_enters_the_api_payload(self, mock_post):
+        mock_post.return_value = _resp(401, {"error": {"type": "auth_error", "message": "denied"}})
+        agent = mmh3.MiniMaxH3Agent(api_key="test-key")
+        agent.generate_video(mmh3.VideoGenRequest(prompt="ok"), shot_label="Shot 02 — Gather & Rise")
+
+        sent_payload = mock_post.call_args.kwargs["json"]
+        self.assertNotIn("shot_label", sent_payload)
+        self.assertNotIn("Gather & Rise", json.dumps(sent_payload))
+
+    def test_history_title_shows_label_when_present(self):
+        record = mmh3.GenerationRecord(
+            provider="minimax", model="MiniMax-H3", mode="reference_to_video",
+            resolution="768P", duration_seconds=6, ratio="16:9", prompt="ok",
+            reference_assets=[], status="succeeded", shot_label="Shot 02 — Gather & Rise",
+            created_at="2026-09-30T12:00:00+00:00",
+        )
+        title = mmh3_ui._history_entry_title(record)
+        self.assertTrue(title.startswith("Shot 02 — Gather & Rise"))
+        self.assertIn("succeeded", title)
+
+    def test_history_title_unchanged_when_label_absent(self):
+        """Preserves the exact original title format when no label is set."""
+        record = mmh3.GenerationRecord(
+            provider="minimax", model="MiniMax-H3", mode="text_to_video",
+            resolution="768P", duration_seconds=4, ratio="16:9", prompt="ok",
+            reference_assets=[], status="succeeded", created_at="2026-09-30T12:00:00+00:00",
+        )
+        title = mmh3_ui._history_entry_title(record)
+        self.assertEqual(title, "2026-09-30T12:00:00+00:00 — MiniMax-H3 — succeeded")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -70,6 +70,18 @@ def _usd(amount: float) -> str:
     return f"${amount:.2f} USD"
 
 
+def _history_entry_title(rec) -> str:
+    """Generation History expander title. `shot_label` is display-only
+    metadata for telling shots apart in a sequence — when present it's
+    shown first, but created_at/status/model stay visible too, and
+    task_id (the real technical identity) remains available inside the
+    expanded JSON either way. When absent, preserves the original title
+    exactly as before this feature existed."""
+    if rec.shot_label:
+        return f"{rec.shot_label} — {rec.status} · {rec.model} · {rec.created_at}"
+    return f"{rec.created_at} — {rec.model} — {rec.status}"
+
+
 # ── Reference-image normalization ───────────────────────────────────────────
 # Verified 2026-09-30 against platform.minimax.io/docs/api-reference/
 # video-generation-v2-create: image_url.url officially accepts a public URL,
@@ -265,6 +277,18 @@ def display_minimax_h3_tab(scenes: List[Dict], project_title: str):
         elif reference_assets:
             st.caption(f"Using {len(reference_assets)} image(s) as `{role}`.")
 
+    shot_label = st.text_input(
+        "Shot label (optional)",
+        key="mmh3_shot_label",
+        placeholder="e.g. Shot 02 — Gather & Rise",
+        help=(
+            "Human-readable metadata for telling generations apart in a "
+            "multi-shot sequence. Purely for display in Generation History — "
+            "the task ID underneath remains the real technical identity, and "
+            "this is never sent to MiniMax as part of the request."
+        ),
+    ).strip() or None
+
     try:
         cost = estimate_video_cost(
             model=model,
@@ -308,6 +332,7 @@ def display_minimax_h3_tab(scenes: List[Dict], project_title: str):
                 request,
                 pricing_version=cost.pricing_version,
                 estimated_cost_usd=cost.total_usd,
+                shot_label=shot_label,
             )
             if record.status == "succeeded" and record.output_url:
                 record.audio_present = detect_audio_stream(record.output_url)
@@ -327,5 +352,5 @@ def display_minimax_h3_tab(scenes: List[Dict], project_title: str):
         st.markdown("---")
         st.markdown("#### Generation history")
         for rec in reversed(agent.generation_history[-10:]):
-            with st.expander(f"{rec.created_at} — {rec.model} — {rec.status}"):
+            with st.expander(_history_entry_title(rec)):
                 st.json(rec.to_safe_dict())

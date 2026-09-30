@@ -198,6 +198,12 @@ class GenerationRecord:
     `output_url` is MiniMax's own remote result URL. It is NOT assumed to be
     a durable asset reference (MiniMax URLs may expire) — V1 deliberately
     does not download/persist the asset; that is left for a later phase.
+
+    `shot_label` (added 2026-09-30) is optional human-readable metadata
+    ("Shot 02 — Gather & Rise") for telling generations apart in a
+    multi-shot sequence. It is a label, not an identifier — `task_id`
+    remains the immutable technical identity underneath; nothing keys off
+    `shot_label` for correctness, only for display.
     """
     provider: str
     model: str
@@ -217,6 +223,7 @@ class GenerationRecord:
     created_at: str = ""
     updated_at: str = ""
     pricing_version: Optional[str] = None
+    shot_label: Optional[str] = None
 
     def __post_init__(self):
         now = datetime.now(timezone.utc).isoformat()
@@ -355,6 +362,7 @@ class MiniMaxH3Agent:
         pricing_version: Optional[str] = None,
         estimated_cost_usd: Optional[float] = None,
         max_wait_seconds: Optional[int] = None,
+        shot_label: Optional[str] = None,
     ) -> GenerationRecord:
         record = GenerationRecord(
             provider="minimax",
@@ -370,6 +378,7 @@ class MiniMaxH3Agent:
             ],
             estimated_cost_usd=estimated_cost_usd,
             pricing_version=pricing_version,
+            shot_label=shot_label or None,
         )
 
         if not self.available:
