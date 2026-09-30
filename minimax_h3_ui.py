@@ -662,14 +662,24 @@ def _display_sequence_assembly(agent):
     seq_shots = st.session_state["mmh3_sequence_shots"]
     uploaded_takes = st.session_state["mmh3_sequence_uploaded_takes"]
 
-    # Sync new generation-shot labels in without touching entries that
-    # already have a take selected.
-    existing_labels = {s["shot_label"] for s in seq_shots}
+    # Sync by each generation-shot's stable id, never by its label text --
+    # labels are free-text and not unique, so two shots sharing a label
+    # (e.g. mid-rename) must NOT collapse into one Sequence Assembly slot.
+    # Renaming a shot updates its existing slot's displayed label in place
+    # instead of creating a stale duplicate.
+    existing_by_gen_id = {s["gen_shot_id"]: s for s in seq_shots if s.get("gen_shot_id")}
     for i, s in enumerate(gen_shots):
         label = s["label"] or f"Shot {i + 1:02d}"
-        if label not in existing_labels:
-            seq_shots.append({"id": str(uuid.uuid4()), "shot_label": label, "task_id": None, "in": 0.0, "out": None})
-            existing_labels.add(label)
+        existing = existing_by_gen_id.get(s["id"])
+        if existing is not None:
+            existing["shot_label"] = label
+        else:
+            new_entry = {
+                "id": str(uuid.uuid4()), "gen_shot_id": s["id"], "shot_label": label,
+                "task_id": None, "in": 0.0, "out": None,
+            }
+            seq_shots.append(new_entry)
+            existing_by_gen_id[s["id"]] = new_entry
 
     if not seq_shots:
         st.info("Add shots above first, then come back here to assemble them.")
