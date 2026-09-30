@@ -201,6 +201,41 @@ class TestSequenceAssembly(unittest.TestCase):
         with self.assertRaises(sa.SequenceAssemblyError):
             sa.assemble_sequence(seq, self.tmp / "empty.mp4", cache_dir=self.cache_dir)
 
+    # ---- local file upload as a take source ----
+
+    def test_register_local_file_builds_a_usable_take(self):
+        raw = self.clip_with_audio.read_bytes()
+        take = sa.register_local_file(raw, cache_dir=self.cache_dir)
+        self.assertEqual(take.provider, "local_upload")
+        self.assertTrue(take.task_id.startswith("local-"))
+        self.assertEqual(take.source_url, "")
+        self.assertTrue(take.cached_path and Path(take.cached_path).exists())
+        self.assertAlmostEqual(take.duration_seconds, 2.0, delta=0.3)
+        self.assertTrue(take.audio_present)
+
+    def test_register_local_file_detects_no_audio(self):
+        raw = self.clip_no_audio.read_bytes()
+        take = sa.register_local_file(raw, cache_dir=self.cache_dir)
+        self.assertFalse(take.audio_present)
+
+    @patch("sequence_assembly.requests.get")
+    def test_uploaded_take_materializes_from_cache_without_network(self, mock_get):
+        raw = self.clip_with_audio.read_bytes()
+        take = sa.register_local_file(raw, cache_dir=self.cache_dir)
+        result = sa.materialize_take(take, "Shot 01", cache_dir=self.cache_dir)
+        self.assertTrue(result.exists())
+        mock_get.assert_not_called()  # already on disk -- materialize_take's cache-hit path
+
+    def test_uploaded_take_assembles_into_a_sequence(self):
+        raw = self.clip_with_audio.read_bytes()
+        take = sa.register_local_file(raw, cache_dir=self.cache_dir)
+        seq = sa.Sequence(title="T", shots=[
+            sa.SequenceShot(shot_label="Shot 01", take=take, out_seconds=1.0),
+        ])
+        out = self.tmp / "out_uploaded.mp4"
+        result = sa.assemble_sequence(seq, out, cache_dir=self.cache_dir)
+        self.assertTrue(result.exists() and result.stat().st_size > 0)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -34,6 +34,7 @@ try:
         SequenceShot,
         SelectedTake,
         assemble_sequence,
+        register_local_file,
     )
     SEQUENCE_ASSEMBLY_AVAILABLE = True
 except ImportError:
@@ -621,7 +622,14 @@ def _display_sequence_assembly(agent):
     never touches a shot's prompt/camera/lighting/references, and never
     mutates any GenerationRecord. sequence_assembly.py itself has no
     Streamlit/MiniMax knowledge at all -- everything provider-specific
-    happens in this function via _selected_take_from_generation_record()."""
+    happens in this function via _selected_take_from_generation_record().
+
+    A shot's take can come from either agent.generation_history (this
+    session's live generations) OR a local file upload. The upload path
+    exists because agent.generation_history is process-memory-only and
+    does not survive a Railway redeploy (2026-09-30) -- uploading a
+    previously-downloaded clip is the recovery path when a session
+    resets but the actual video files are still safe on disk."""
     st.markdown("---")
     st.subheader("Sequence Assembly")
     st.caption(
@@ -634,15 +642,15 @@ def _display_sequence_assembly(agent):
         st.error("❌ sequence_assembly module not loaded.")
         return
 
-    eligible = [r for r in agent.generation_history if r.status == "succeeded" and r.output_url]
-    if not eligible:
-        st.info("No succeeded generations yet — generate at least one shot first.")
-        return
+    eligible_records = [r for r in agent.generation_history if r.status == "succeeded" and r.output_url]
 
     gen_shots = st.session_state.get("mmh3_shots", [])
     if "mmh3_sequence_shots" not in st.session_state:
         st.session_state["mmh3_sequence_shots"] = []
+    if "mmh3_sequence_uploaded_takes" not in st.session_state:
+        st.session_state["mmh3_sequence_uploaded_takes"] = {}  # task_id -> SelectedTake
     seq_shots = st.session_state["mmh3_sequence_shots"]
+    uploaded_takes = st.session_state["mmh3_sequence_uploaded_takes"]
 
     # Sync new generation-shot labels in without touching entries that
     # already have a take selected.
@@ -650,57 +658,89 @@ def _display_sequence_assembly(agent):
     for i, s in enumerate(gen_shots):
         label = s["label"] or f"Shot {i + 1:02d}"
         if label not in existing_labels:
-            seq_shots.append({"shot_label": label, "task_id": None, "in": 0.0, "out": None})
+            seq_shots.append({"id": str(uuid.uuid4()), "shot_label": label, "task_id": None, "in": 0.0, "out": None})
             existing_labels.add(label)
 
     if not seq_shots:
         st.info("Add shots above first, then come back here to assemble them.")
         return
 
-    by_task_id = {r.task_id: r for r in eligible}
+    # Unify both sources into one SelectedTake-keyed lookup, so the rest of
+    # this function doesn't need to care where a take came from.
+    takes_by_id: Dict[str, "SelectedTake"] = dict(uploaded_takes)
+    record_by_id = {r.task_id: r for r in eligible_records}
+    for r in eligible_records:
+        takes_by_id[r.task_id] = _selected_take_from_generation_record(r)
+
     sequence_title = st.text_input("Sequence title", value="Sequence", key="mmh3_seq_title")
 
     for i, seq_shot in enumerate(seq_shots):
+        sid = seq_shot.get("id") or str(i)
         st.markdown(f"**{seq_shot['shot_label']}**")
-        matching = [r for r in eligible if r.shot_label == seq_shot["shot_label"]]
-        other = [r for r in eligible if r.shot_label != seq_shot["shot_label"]]
-        ordered = matching + other
 
-        def _fmt(r):
-            mismatch = " ⚠️ (different shot)" if r.shot_label != seq_shot["shot_label"] else ""
-            label = r.shot_label or "(unlabeled)"
-            return f"{label} · {r.task_id} · {r.duration_seconds}s{mismatch}"
+        source_choice = st.radio(
+            "Take source", ["From generation history", "Upload local file"],
+            key=f"mmh3_seq_source_{sid}", horizontal=True,
+        )
 
-        options = ["(none selected)"] + [_fmt(r) for r in ordered]
-        current_idx = 0
+        if source_choice == "From generation history":
+            matching = [t for t in takes_by_id.values() if t.provider != "local_upload" and t.shot_label_hint == seq_shot["shot_label"]]
+            other = [t for t in takes_by_id.values() if t.provider != "local_upload" and t.shot_label_hint != seq_shot["shot_label"]]
+            ordered = matching + other
+
+            def _fmt(t):
+                mismatch = " ⚠️ (different shot)" if t.shot_label_hint != seq_shot["shot_label"] else ""
+                label = t.shot_label_hint or "(unlabeled)"
+                return f"{label} · {t.task_id} · {t.duration_seconds:.1f}s{mismatch}"
+
+            if not ordered:
+                st.info("No succeeded generations in this session yet.")
+            else:
+                options = ["(none selected)"] + [_fmt(t) for t in ordered]
+                current_idx = 0
+                if seq_shot.get("task_id"):
+                    for j, t in enumerate(ordered):
+                        if t.task_id == seq_shot["task_id"]:
+                            current_idx = j + 1
+                            break
+                choice = st.selectbox("Selected take", options, index=current_idx, key=f"mmh3_seq_take_{sid}")
+                seq_shot["task_id"] = None if choice == "(none selected)" else ordered[options.index(choice) - 1].task_id
+        else:
+            uploaded_file = st.file_uploader(
+                f"Upload video for {seq_shot['shot_label']}", type=["mp4", "mov"], key=f"mmh3_seq_local_upload_{sid}",
+                help="Recovers a previously-generated clip whose in-app record was lost to a session/redeploy reset.",
+            )
+            if uploaded_file is not None:
+                already = seq_shot.get("_uploaded_name") == uploaded_file.name
+                if not already:
+                    take = register_local_file(uploaded_file.getvalue())
+                    uploaded_takes[take.task_id] = take
+                    takes_by_id[take.task_id] = take
+                    seq_shot["task_id"] = take.task_id
+                    seq_shot["_uploaded_name"] = uploaded_file.name
+                st.caption(f"✅ Registered as a local take ({takes_by_id[seq_shot['task_id']].duration_seconds:.1f}s).")
+
         if seq_shot.get("task_id"):
-            for j, r in enumerate(ordered):
-                if r.task_id == seq_shot["task_id"]:
-                    current_idx = j + 1
-                    break
-
-        choice = st.selectbox("Selected take", options, index=current_idx, key=f"mmh3_seq_take_{i}")
-        seq_shot["task_id"] = None if choice == "(none selected)" else ordered[options.index(choice) - 1].task_id
-
-        if seq_shot["task_id"]:
-            rec = by_task_id.get(seq_shot["task_id"])
-            if rec:
+            take = takes_by_id.get(seq_shot["task_id"])
+            if take:
                 col1, col2 = st.columns(2)
                 with col1:
                     seq_shot["in"] = st.number_input(
-                        "In (s)", min_value=0.0, max_value=float(rec.duration_seconds),
-                        value=float(seq_shot.get("in") or 0.0), step=0.1, key=f"mmh3_seq_in_{i}",
+                        "In (s)", min_value=0.0, max_value=float(take.duration_seconds),
+                        value=float(seq_shot.get("in") or 0.0), step=0.1, key=f"mmh3_seq_in_{sid}",
                     )
                 with col2:
                     default_out = seq_shot.get("out")
                     if default_out is None:
-                        default_out = float(rec.duration_seconds)
+                        default_out = float(take.duration_seconds)
                     seq_shot["out"] = st.number_input(
-                        "Out (s)", min_value=0.0, max_value=float(rec.duration_seconds),
-                        value=float(default_out), step=0.1, key=f"mmh3_seq_out_{i}",
+                        "Out (s)", min_value=0.0, max_value=float(take.duration_seconds),
+                        value=float(default_out), step=0.1, key=f"mmh3_seq_out_{sid}",
                     )
-                if st.button(f"▶️ Preview {seq_shot['shot_label']}", key=f"mmh3_seq_preview_one_{i}"):
-                    st.video(rec.output_url)
+                if st.button(f"▶️ Preview {seq_shot['shot_label']}", key=f"mmh3_seq_preview_one_{sid}"):
+                    preview_source = take.source_url or take.cached_path
+                    if preview_source:
+                        st.video(preview_source)
         st.markdown("---")
 
     def _build_sequence():
@@ -708,10 +748,9 @@ def _display_sequence_assembly(agent):
         for seq_shot in seq_shots:
             if not seq_shot.get("task_id"):
                 return None, seq_shot["shot_label"]
-            rec = by_task_id.get(seq_shot["task_id"])
-            if not rec:
+            take = takes_by_id.get(seq_shot["task_id"])
+            if not take:
                 return None, seq_shot["shot_label"]
-            take = _selected_take_from_generation_record(rec)
             shots.append(SequenceShot(
                 shot_label=seq_shot["shot_label"], take=take,
                 in_seconds=seq_shot.get("in") or 0.0, out_seconds=seq_shot.get("out"),

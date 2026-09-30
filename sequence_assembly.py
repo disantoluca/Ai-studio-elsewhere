@@ -32,6 +32,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional
@@ -164,6 +165,48 @@ def materialize_take(take: SelectedTake, shot_label: str, cache_dir: Optional[Pa
     tmp.rename(dest)
     take.cached_path = str(dest)
     return dest
+
+
+def _probe_duration(path: Path) -> float:
+    binary = _ffprobe_bin()
+    if not binary:
+        return 0.0
+    try:
+        proc = subprocess.run(
+            [binary, "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", str(path)],
+            capture_output=True, timeout=20, text=True,
+        )
+        return float(proc.stdout.strip())
+    except Exception:
+        return 0.0
+
+
+def register_local_file(raw_bytes: bytes, cache_dir: Optional[Path] = None) -> SelectedTake:
+    """Build a SelectedTake directly from local file bytes (e.g. a
+    Streamlit upload), bypassing the download step entirely. Recovers a
+    previously-generated clip that's no longer in any provider's in-memory
+    generation history -- agent.generation_history is process-memory-only
+    and does not survive a Railway redeploy (architecture checkpoint
+    2026-09-30). Written into the exact same cache location convention as
+    a downloaded take, keyed by a fresh synthetic task_id, so everything
+    downstream (materialize_take's cache-hit path, trim, concat) treats it
+    identically to a provider-sourced take -- no special-casing needed."""
+    cache_dir = cache_dir or CACHE_DIR
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    task_id = f"local-{uuid.uuid4().hex}"
+    dest = cache_dir / f"{task_id}.mp4"
+    dest.write_bytes(raw_bytes)
+
+    return SelectedTake(
+        provider="local_upload",
+        task_id=task_id,
+        source_url="",
+        duration_seconds=_probe_duration(dest),
+        shot_label_hint="",
+        audio_present=probe_has_audio(dest),
+        cached_path=str(dest),
+    )
 
 
 def _run_ffmpeg(args: List[str]) -> None:
