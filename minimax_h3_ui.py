@@ -583,16 +583,26 @@ def _display_shot_sequence(agent):
                         if record.status == "succeeded" and record.output_url:
                             record.audio_present = detect_audio_stream(record.output_url)
 
-                    if record.status == "succeeded":
-                        st.success(f"✅ Succeeded — task {record.task_id}")
-                        if record.output_url:
-                            st.video(record.output_url)
-                            st.caption("Remote MiniMax result URL — not a durable local asset in V1.")
-                        st.caption(_AUDIO_LABELS[record.audio_present])
-                    elif record.status == "timeout":
-                        st.warning(f"⏱️ Timed out: {record.error}")
-                    else:
-                        st.error(f"❌ {record.status}: {record.error}")
+            # Looked up from agent.generation_history on every render (not
+            # gated behind the button's transient True return) so this
+            # shot's result stays visible across reruns triggered elsewhere
+            # on the page -- e.g. adding another shot no longer makes this
+            # shot's result disappear.
+            shot_label_for_lookup = shot["label"] or f"Shot {i+1}"
+            shot_records = [r for r in agent.generation_history if r.shot_label == shot_label_for_lookup]
+            if shot_records:
+                latest = shot_records[-1]
+                st.markdown(f"**Latest result — task {latest.task_id}:**")
+                if latest.status == "succeeded":
+                    st.success(f"✅ Succeeded — task {latest.task_id}")
+                    if latest.output_url:
+                        st.video(latest.output_url)
+                        st.caption("Remote MiniMax result URL — not a durable local asset in V1.")
+                    st.caption(_AUDIO_LABELS[latest.audio_present])
+                elif latest.status == "timeout":
+                    st.warning(f"⏱️ Timed out: {latest.error}")
+                else:
+                    st.error(f"❌ {latest.status}: {latest.error}")
 
             if st.button("🗑️ Remove this shot", key=f"mmh3_seq_remove_{sid}"):
                 shot_to_remove = sid
@@ -706,11 +716,19 @@ def _display_sequence_assembly(agent):
                 choice = st.selectbox("Selected take", options, index=current_idx, key=f"mmh3_seq_take_{sid}")
                 seq_shot["task_id"] = None if choice == "(none selected)" else ordered[options.index(choice) - 1].task_id
         else:
+            # No `type=` filter here deliberately: Streamlit maps it to the
+            # browser's native file-picker `accept` filter, and on macOS
+            # (Safari in particular) that filter can grey out or reject
+            # genuinely valid .mp4/.mov files due to browser-side MIME
+            # sniffing quirks, independent of the actual extension. We
+            # accept anything and validate the extension ourselves instead.
             uploaded_file = st.file_uploader(
-                f"Upload video for {seq_shot['shot_label']}", type=["mp4", "mov"], key=f"mmh3_seq_local_upload_{sid}",
-                help="Recovers a previously-generated clip whose in-app record was lost to a session/redeploy reset.",
+                f"Upload video for {seq_shot['shot_label']}", key=f"mmh3_seq_local_upload_{sid}",
+                help="Accepts .mp4/.mov. Recovers a previously-generated clip whose in-app record was lost to a session/redeploy reset.",
             )
-            if uploaded_file is not None:
+            if uploaded_file is not None and not uploaded_file.name.lower().endswith((".mp4", ".mov")):
+                st.error(f"❌ Unsupported file type: {uploaded_file.name} — please upload an .mp4 or .mov file.")
+            elif uploaded_file is not None:
                 already = seq_shot.get("_uploaded_name") == uploaded_file.name
                 if not already:
                     take = register_local_file(uploaded_file.getvalue())
