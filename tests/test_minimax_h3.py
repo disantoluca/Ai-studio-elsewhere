@@ -882,5 +882,35 @@ class TestShotSequence(unittest.TestCase):
         self.assertEqual(composed, "Base action.")
 
 
+class TestSelectedTakeAdapter(unittest.TestCase):
+    """The one place a MiniMax GenerationRecord is read into the
+    provider-neutral SelectedTake shape (sequence_assembly.py itself never
+    imports minimax_h3_agent). Confirms the adapter only reads -- the
+    source GenerationRecord must be byte-for-byte identical before and
+    after."""
+
+    def test_adapter_copies_fields_without_mutating_the_record(self):
+        record = mmh3.GenerationRecord(
+            provider="minimax", model="MiniMax-H3", mode="reference_to_video",
+            resolution="768P", duration_seconds=12, ratio="16:9",
+            prompt="ok", reference_assets=[], task_id="task-xyz",
+            status="succeeded", output_url="https://cdn/out.mp4",
+            audio_present=True, shot_label="Shot 03 — Look Back",
+        )
+        before = record.to_safe_dict()
+
+        take = mmh3_ui._selected_take_from_generation_record(record)
+
+        after = record.to_safe_dict()
+        self.assertEqual(before, after)  # untouched
+
+        self.assertEqual(take.provider, "minimax")
+        self.assertEqual(take.task_id, "task-xyz")
+        self.assertEqual(take.source_url, "https://cdn/out.mp4")
+        self.assertEqual(take.duration_seconds, 12.0)
+        self.assertEqual(take.shot_label_hint, "Shot 03 — Look Back")
+        self.assertTrue(take.audio_present)
+
+
 if __name__ == "__main__":
     unittest.main()

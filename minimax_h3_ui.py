@@ -17,6 +17,7 @@ here.
 import base64
 import logging
 import mimetypes
+import tempfile
 import uuid
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -24,6 +25,20 @@ from typing import Dict, List, Optional, Tuple
 import streamlit as st
 
 logger = logging.getLogger(__name__)
+
+try:
+    from sequence_assembly import (
+        MaterializationError,
+        Sequence,
+        SequenceAssemblyError,
+        SequenceShot,
+        SelectedTake,
+        assemble_sequence,
+    )
+    SEQUENCE_ASSEMBLY_AVAILABLE = True
+except ImportError:
+    SEQUENCE_ASSEMBLY_AVAILABLE = False
+    logger.warning("⚠️ sequence_assembly not available")
 
 try:
     from minimax_h3_agent import (
@@ -247,6 +262,22 @@ def _new_shot(label_hint: str = "") -> Dict:
         "camera": "",
         "lighting": "",
     }
+
+
+def _selected_take_from_generation_record(rec) -> "SelectedTake":
+    """The one place a MiniMax GenerationRecord is read into the
+    provider-neutral SelectedTake shape. Only ever reads fields off `rec`
+    -- never mutates it. A Runway equivalent would be an equally small,
+    separate function; sequence_assembly.py itself never needs to know
+    either provider exists."""
+    return SelectedTake(
+        provider=rec.provider,
+        task_id=rec.task_id or "",
+        source_url=rec.output_url or "",
+        duration_seconds=float(rec.duration_seconds),
+        shot_label_hint=rec.shot_label or "",
+        audio_present=rec.audio_present,
+    )
 
 
 def display_minimax_h3_tab(scenes: List[Dict], project_title: str):
@@ -579,3 +610,147 @@ def _display_shot_sequence(agent):
         for rec in reversed(agent.generation_history[-10:]):
             with st.expander(_history_entry_title(rec)):
                 st.json(rec.to_safe_dict())
+
+    _display_sequence_assembly(agent)
+
+
+def _display_sequence_assembly(agent):
+    """Sequence Assembly V1 — additive, beneath Shot Sequence. Its state
+    (st.session_state["mmh3_sequence_shots"]) is deliberately separate from
+    the generation-control state (mmh3_shots): choosing a take/trim here
+    never touches a shot's prompt/camera/lighting/references, and never
+    mutates any GenerationRecord. sequence_assembly.py itself has no
+    Streamlit/MiniMax knowledge at all -- everything provider-specific
+    happens in this function via _selected_take_from_generation_record()."""
+    st.markdown("---")
+    st.subheader("Sequence Assembly")
+    st.caption(
+        "Choose which generated take belongs to each shot, set in/out trims, preview, "
+        "and export one MP4. Hard cuts only — no transitions, titles, music, or color "
+        "grading in V1. Source audio is always preserved."
+    )
+
+    if not SEQUENCE_ASSEMBLY_AVAILABLE:
+        st.error("❌ sequence_assembly module not loaded.")
+        return
+
+    eligible = [r for r in agent.generation_history if r.status == "succeeded" and r.output_url]
+    if not eligible:
+        st.info("No succeeded generations yet — generate at least one shot first.")
+        return
+
+    gen_shots = st.session_state.get("mmh3_shots", [])
+    if "mmh3_sequence_shots" not in st.session_state:
+        st.session_state["mmh3_sequence_shots"] = []
+    seq_shots = st.session_state["mmh3_sequence_shots"]
+
+    # Sync new generation-shot labels in without touching entries that
+    # already have a take selected.
+    existing_labels = {s["shot_label"] for s in seq_shots}
+    for i, s in enumerate(gen_shots):
+        label = s["label"] or f"Shot {i + 1:02d}"
+        if label not in existing_labels:
+            seq_shots.append({"shot_label": label, "task_id": None, "in": 0.0, "out": None})
+            existing_labels.add(label)
+
+    if not seq_shots:
+        st.info("Add shots above first, then come back here to assemble them.")
+        return
+
+    by_task_id = {r.task_id: r for r in eligible}
+    sequence_title = st.text_input("Sequence title", value="Sequence", key="mmh3_seq_title")
+
+    for i, seq_shot in enumerate(seq_shots):
+        st.markdown(f"**{seq_shot['shot_label']}**")
+        matching = [r for r in eligible if r.shot_label == seq_shot["shot_label"]]
+        other = [r for r in eligible if r.shot_label != seq_shot["shot_label"]]
+        ordered = matching + other
+
+        def _fmt(r):
+            mismatch = " ⚠️ (different shot)" if r.shot_label != seq_shot["shot_label"] else ""
+            label = r.shot_label or "(unlabeled)"
+            return f"{label} · {r.task_id} · {r.duration_seconds}s{mismatch}"
+
+        options = ["(none selected)"] + [_fmt(r) for r in ordered]
+        current_idx = 0
+        if seq_shot.get("task_id"):
+            for j, r in enumerate(ordered):
+                if r.task_id == seq_shot["task_id"]:
+                    current_idx = j + 1
+                    break
+
+        choice = st.selectbox("Selected take", options, index=current_idx, key=f"mmh3_seq_take_{i}")
+        seq_shot["task_id"] = None if choice == "(none selected)" else ordered[options.index(choice) - 1].task_id
+
+        if seq_shot["task_id"]:
+            rec = by_task_id.get(seq_shot["task_id"])
+            if rec:
+                col1, col2 = st.columns(2)
+                with col1:
+                    seq_shot["in"] = st.number_input(
+                        "In (s)", min_value=0.0, max_value=float(rec.duration_seconds),
+                        value=float(seq_shot.get("in") or 0.0), step=0.1, key=f"mmh3_seq_in_{i}",
+                    )
+                with col2:
+                    default_out = seq_shot.get("out")
+                    if default_out is None:
+                        default_out = float(rec.duration_seconds)
+                    seq_shot["out"] = st.number_input(
+                        "Out (s)", min_value=0.0, max_value=float(rec.duration_seconds),
+                        value=float(default_out), step=0.1, key=f"mmh3_seq_out_{i}",
+                    )
+                if st.button(f"▶️ Preview {seq_shot['shot_label']}", key=f"mmh3_seq_preview_one_{i}"):
+                    st.video(rec.output_url)
+        st.markdown("---")
+
+    def _build_sequence():
+        shots = []
+        for seq_shot in seq_shots:
+            if not seq_shot.get("task_id"):
+                return None, seq_shot["shot_label"]
+            rec = by_task_id.get(seq_shot["task_id"])
+            if not rec:
+                return None, seq_shot["shot_label"]
+            take = _selected_take_from_generation_record(rec)
+            shots.append(SequenceShot(
+                shot_label=seq_shot["shot_label"], take=take,
+                in_seconds=seq_shot.get("in") or 0.0, out_seconds=seq_shot.get("out"),
+            ))
+        return Sequence(title=sequence_title, shots=shots), None
+
+    sequence, missing_label = _build_sequence()
+    if sequence is None:
+        st.warning(f"⚠️ Select a take for '{missing_label}' before previewing or exporting.")
+        return
+
+    st.markdown(f"**Estimated duration: {sequence.estimated_duration():.1f} s**")
+    for s in sequence.shots:
+        st.caption(f"- {s.shot_label}: {s.trimmed_duration():.1f}s")
+
+    colp, cole = st.columns(2)
+    with colp:
+        preview_clicked = st.button("▶️ Preview Sequence", key="mmh3_seq_preview_all")
+    with cole:
+        export_clicked = st.button("🎬 Export Movie (MP4)", type="primary", key="mmh3_seq_export")
+
+    if preview_clicked or export_clicked:
+        with st.spinner("Assembling sequence..."):
+            output_path = Path(tempfile.gettempdir()) / f"sequence_{uuid.uuid4().hex}.mp4"
+            try:
+                assemble_sequence(sequence, output_path)
+            except MaterializationError as e:
+                st.error(f"❌ Could not use the take selected for shot '{e.shot_label}' (task {e.task_id}): {e.reason}")
+                return
+            except SequenceAssemblyError as e:
+                st.error(f"❌ Assembly failed: {e}")
+                return
+
+        st.video(str(output_path))
+        if export_clicked:
+            st.download_button(
+                "⬇️ Download MP4",
+                data=output_path.read_bytes(),
+                file_name=f"{(sequence_title or 'sequence').replace(' ', '_')}.mp4",
+                mime="video/mp4",
+                key="mmh3_seq_download",
+            )
