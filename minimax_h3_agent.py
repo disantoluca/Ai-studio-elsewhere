@@ -75,6 +75,12 @@ MAX_REFERENCE_AUDIO = 3
 MAX_REFERENCE_TOTAL_FILES = 12
 MAX_PROMPT_CHARS = 7000
 
+# Documented: "total request body <= 64 MB; use public URLs for large
+# files, avoid Base64." Base64 is supported, not forbidden, but this
+# guard fails closed locally before any network call rather than relying
+# on the API to reject an oversized combination.
+MAX_REQUEST_BODY_BYTES = 64 * 1024 * 1024
+
 TERMINAL_STATUSES = {"succeeded", "failed", "cancelled"}
 IN_PROGRESS_STATUSES = {"queued", "running"}
 KNOWN_STATUSES = TERMINAL_STATUSES | IN_PROGRESS_STATUSES
@@ -329,6 +335,15 @@ class MiniMaxH3Agent:
                 issues.append(f"Unsupported reference content type '{item.type}'.")
             elif not item.url:
                 issues.append(f"Reference item with role '{item.role}' is missing a url.")
+
+        total_body_bytes = len(request.prompt.encode("utf-8"))
+        total_body_bytes += sum(len((c.url or "").encode("utf-8")) for c in request.reference_assets)
+        if total_body_bytes > MAX_REQUEST_BODY_BYTES:
+            mb = total_body_bytes / (1024 * 1024)
+            issues.append(
+                f"Estimated request body is {mb:.1f} MB, exceeds MiniMax's documented "
+                f"64 MB limit — use a public URL instead of inline base64 for large references."
+            )
 
         return issues
 

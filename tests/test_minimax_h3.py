@@ -14,6 +14,7 @@ import json
 import subprocess
 import sys
 import os
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -565,6 +566,127 @@ class TestSingletonReconfiguration(unittest.TestCase):
 
         second = mmh3.get_minimax_h3_agent()
         self.assertIs(first, second)  # generation_history must not be dropped mid-session
+
+
+class _FakeUploadedFile:
+    """Minimal stand-in for streamlit's UploadedFile: .type + .getvalue()."""
+
+    def __init__(self, mime_type: str, data: bytes):
+        self.type = mime_type
+        self._data = data
+
+    def getvalue(self) -> bytes:
+        return self._data
+
+
+class TestReferenceImageNormalization(unittest.TestCase):
+    """Verified 2026-09-30: MiniMax's image_url.url officially accepts a
+    public URL, mm_file://{file_id}, or a data:image/<format>;base64,...
+    data URI. These tests cover the UI-layer normalization that lets a
+    scene concept image OR an uploaded file reach that representation."""
+
+    def test_public_url_passes_through_unchanged(self):
+        url, err = mmh3_ui._normalize_reference_image("https://cdn.example.com/x.png")
+        self.assertEqual(url, "https://cdn.example.com/x.png")
+        self.assertIsNone(err)
+
+    def test_existing_data_uri_passes_through_unchanged(self):
+        original = "data:image/png;base64,aGVsbG8="
+        url, err = mmh3_ui._normalize_reference_image(original)
+        self.assertEqual(url, original)
+        self.assertIsNone(err)
+
+    def test_none_source_gives_clear_error(self):
+        url, err = mmh3_ui._normalize_reference_image(None)
+        self.assertIsNone(url)
+        self.assertIn("No image provided", err)
+
+    def test_missing_local_path_gives_clear_error_not_exception(self):
+        url, err = mmh3_ui._normalize_reference_image("/tmp/does-not-exist-12345.png")
+        self.assertIsNone(url)
+        self.assertIn("no longer available", err)
+
+    def test_local_png_file_is_encoded_to_data_uri(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "frame.png"
+            path.write_bytes(b"\x89PNG\r\n\x1a\nfake-png-bytes")
+            url, err = mmh3_ui._normalize_reference_image(str(path))
+            self.assertIsNone(err)
+            self.assertTrue(url.startswith("data:image/png;base64,"))
+
+    def test_unsupported_local_extension_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "clip.gif"
+            path.write_bytes(b"GIF89a-fake")
+            url, err = mmh3_ui._normalize_reference_image(str(path))
+            self.assertIsNone(url)
+            self.assertIn("Unsupported image format", err)
+
+    def test_uploaded_file_is_encoded_to_data_uri(self):
+        fake = _FakeUploadedFile("image/jpeg", b"\xff\xd8\xff-fake-jpeg-bytes")
+        url, err = mmh3_ui._normalize_reference_image(fake)
+        self.assertIsNone(err)
+        self.assertTrue(url.startswith("data:image/jpeg;base64,"))
+
+    def test_uploaded_file_unsupported_mime_rejected(self):
+        fake = _FakeUploadedFile("image/heic", b"fake-heic-bytes")
+        url, err = mmh3_ui._normalize_reference_image(fake)
+        self.assertIsNone(url)
+        self.assertIn("Unsupported upload type", err)
+
+    def test_oversized_upload_rejected_before_encoding(self):
+        oversized = b"0" * (mmh3_ui.MAX_REFERENCE_IMAGE_BYTES + 1)
+        fake = _FakeUploadedFile("image/png", oversized)
+        url, err = mmh3_ui._normalize_reference_image(fake)
+        self.assertIsNone(url)
+        self.assertIn("exceeds MiniMax's 30 MB", err)
+
+    def test_encoded_result_never_leaks_into_provenance_identifier(self):
+        """The whole point of doing this in the UI is that the agent's
+        existing identifier() already redacts data URIs from provenance —
+        confirm that still holds for a freshly-encoded upload."""
+        fake = _FakeUploadedFile("image/png", b"\x89PNG-fake")
+        url, err = mmh3_ui._normalize_reference_image(fake)
+        self.assertIsNone(err)
+        item = mmh3.ContentItem(type="image_url", url=url, role="first_frame")
+        self.assertEqual(item.identifier(), "<inline-data>")
+
+
+class TestRequestBodySizeGuard(unittest.TestCase):
+    """New in this change: validate_request() fails closed locally if the
+    estimated request body would exceed MiniMax's documented 64 MB cap,
+    rather than relying on the API to reject it."""
+
+    def setUp(self):
+        self.agent = mmh3.MiniMaxH3Agent(api_key="test-key")
+
+    def test_small_reference_image_passes(self):
+        small_data_uri = "data:image/png;base64," + ("A" * 1000)
+        req = mmh3.VideoGenRequest(
+            prompt="ok",
+            reference_assets=[mmh3.ContentItem(type="image_url", url=small_data_uri, role="reference_image")],
+        )
+        self.assertEqual(self.agent.validate_request(req), [])
+
+    def test_oversized_combined_body_rejected(self):
+        huge_data_uri = "data:image/png;base64," + ("A" * (mmh3.MAX_REQUEST_BODY_BYTES + 100))
+        req = mmh3.VideoGenRequest(
+            prompt="ok",
+            reference_assets=[mmh3.ContentItem(type="image_url", url=huge_data_uri, role="reference_image")],
+        )
+        issues = self.agent.validate_request(req)
+        self.assertTrue(any("64 MB" in i for i in issues))
+
+    @patch("minimax_h3_agent.requests.post")
+    def test_oversized_request_never_reaches_network(self, mock_post):
+        huge_data_uri = "data:image/png;base64," + ("A" * (mmh3.MAX_REQUEST_BODY_BYTES + 100))
+        req = mmh3.VideoGenRequest(
+            prompt="ok",
+            reference_assets=[mmh3.ContentItem(type="image_url", url=huge_data_uri, role="reference_image")],
+        )
+        record = self.agent.generate_video(req)
+        mock_post.assert_not_called()
+        self.assertEqual(record.status, "failed")
 
 
 if __name__ == "__main__":

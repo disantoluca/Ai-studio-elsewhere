@@ -16,8 +16,9 @@ here.
 
 import base64
 import logging
+import mimetypes
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional, Tuple
 
 import streamlit as st
 
@@ -66,6 +67,80 @@ def _usd(amount: float) -> str:
     4-decimal values. Never touches the underlying stored/estimated float,
     which keeps its full precision in `cost`/`GenerationRecord`."""
     return f"${amount:.2f} USD"
+
+
+# ── Reference-image normalization ───────────────────────────────────────────
+# Verified 2026-09-30 against platform.minimax.io/docs/api-reference/
+# video-generation-v2-create: image_url.url officially accepts a public URL,
+# `mm_file://{file_id}`, OR a `data:image/<format>;base64,<Base64>` data URI.
+# minimax_h3_agent.py's ContentItem/validate_request already pass any
+# non-empty url string through untouched — only this UI layer previously
+# restricted candidates to http(s):// only. One shared path below now covers
+# the scene concept image AND an uploaded file, so there is exactly one
+# implementation, not two.
+
+# Documented single-file limit (input media limits table).
+MAX_REFERENCE_IMAGE_BYTES = 30 * 1024 * 1024
+
+# MIME types Streamlit's uploader + st.image can reliably accept/preview.
+# MiniMax's docs additionally list HEIC/HEIF as supported, but those aren't
+# previewable here without an extra Pillow plugin — not offered in the
+# uploader's type filter, so this is a known, deliberate gap, not a silent one.
+_ALLOWED_MIME_TO_FORMAT = {
+    "image/png": "png",
+    "image/jpeg": "jpeg",
+    "image/webp": "webp",
+}
+
+
+def _encode_data_uri(raw: bytes, fmt: str) -> Tuple[Optional[str], Optional[str]]:
+    if len(raw) > MAX_REFERENCE_IMAGE_BYTES:
+        mb = len(raw) / (1024 * 1024)
+        return None, f"Image is {mb:.1f} MB — exceeds MiniMax's 30 MB per-file limit."
+    b64 = base64.b64encode(raw).decode("ascii")
+    return f"data:image/{fmt};base64,{b64}", None
+
+
+def _normalize_reference_image(source) -> Tuple[Optional[str], Optional[str]]:
+    """Convert a reference-image source into a MiniMax-ready string, or
+    return an error explaining why it can't be used. Never makes a network
+    call; never returns/logs the raw image bytes.
+
+    Accepts:
+      - an existing public http(s):// URL or data:image/ URI (str) -> passthrough
+      - a local filesystem path (str) -> read + base64-encode, if the file
+        still exists (it may not, if lost to ephemeral storage)
+      - a Streamlit UploadedFile (has .type and .getvalue())
+
+    Returns (result_url, error_message) — exactly one is not None.
+    """
+    if source is None:
+        return None, "No image provided."
+
+    if isinstance(source, str):
+        if source.startswith(("http://", "https://", "data:image/")):
+            return source, None
+        if _safe_path_exists(source):
+            try:
+                raw = Path(source).read_bytes()
+            except OSError as e:
+                return None, f"Could not read local file: {e}"
+            mime, _ = mimetypes.guess_type(source)
+            fmt = _ALLOWED_MIME_TO_FORMAT.get(mime or "")
+            if not fmt:
+                return None, f"Unsupported image format for '{source}' (allowed: PNG, JPEG, WEBP)."
+            return _encode_data_uri(raw, fmt)
+        return None, (
+            "This local reference image is no longer available — it may have "
+            "been lost to ephemeral storage after a deployment."
+        )
+
+    # Streamlit UploadedFile
+    mime = getattr(source, "type", None)
+    fmt = _ALLOWED_MIME_TO_FORMAT.get(mime or "")
+    if not fmt:
+        return None, f"Unsupported upload type '{mime}' (allowed: PNG, JPEG, WEBP)."
+    return _encode_data_uri(source.getvalue(), fmt)
 
 
 def display_minimax_h3_tab(scenes: List[Dict], project_title: str):
@@ -119,18 +194,37 @@ def display_minimax_h3_tab(scenes: List[Dict], project_title: str):
     )
 
     reference_assets: List[ContentItem] = []
-    concept_is_public_url = isinstance(concept_path, str) and concept_path.startswith(("http://", "https://"))
     if mode_choice != "Text-to-video":
-        if concept_is_public_url:
-            role = "first_frame" if mode_choice.startswith("Image-to-video") else "reference_image"
-            reference_assets.append(ContentItem(type="image_url", url=concept_path, role=role))
-            st.caption(f"Using this scene's concept image as `{role}`.")
+        role = "first_frame" if mode_choice.startswith("Image-to-video") else "reference_image"
+
+        ref_source_choice = st.radio(
+            "Reference source",
+            ["Scene concept image", "Upload image"],
+            key="mmh3_ref_source",
+            horizontal=True,
+        )
+
+        image_source = None
+        if ref_source_choice == "Scene concept image":
+            if concept_path:
+                image_source = concept_path
+            else:
+                st.info("This scene has no concept image yet.")
         else:
-            st.info(
-                "This scene has no public-URL concept image (local files / inline base64 "
-                "aren't submitted automatically in V1), so this generation will run as "
-                "text-to-video instead."
+            uploaded = st.file_uploader(
+                "Reference image", type=["png", "jpg", "jpeg", "webp"], key="mmh3_upload"
             )
+            if uploaded is not None:
+                st.image(uploaded, width=300, caption="Will be used as reference (preview)")
+                image_source = uploaded
+
+        if image_source is not None:
+            resolved_url, error = _normalize_reference_image(image_source)
+            if resolved_url:
+                reference_assets.append(ContentItem(type="image_url", url=resolved_url, role=role))
+                st.caption(f"Using this image as `{role}`.")
+            else:
+                st.info(f"{error} This generation will run as text-to-video instead.")
 
     try:
         cost = estimate_video_cost(
