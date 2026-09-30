@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 try:
     from minimax_h3_agent import (
         ContentItem,
+        MAX_REFERENCE_IMAGES,
         MODEL_DURATION_RANGE,
         MODEL_RESOLUTIONS,
         MODELS,
@@ -196,6 +197,10 @@ def display_minimax_h3_tab(scenes: List[Dict], project_title: str):
     reference_assets: List[ContentItem] = []
     if mode_choice != "Text-to-video":
         role = "first_frame" if mode_choice.startswith("Image-to-video") else "reference_image"
+        # Only "reference_image" supports multiple images (documented cap:
+        # MAX_REFERENCE_IMAGES). first_frame/last_frame are capped at 1 each
+        # regardless, so multi-upload is never offered for that mode.
+        allow_multi = role == "reference_image"
 
         ref_source_choice = st.radio(
             "Reference source",
@@ -204,34 +209,58 @@ def display_minimax_h3_tab(scenes: List[Dict], project_title: str):
             horizontal=True,
         )
 
-        image_source = None
+        image_sources: List = []
         if ref_source_choice == "Scene concept image":
             if concept_path:
-                image_source = concept_path
+                image_sources = [concept_path]
             else:
                 st.info("This scene has no concept image yet.")
+        elif allow_multi:
+            uploaded_files = st.file_uploader(
+                "Reference images",
+                type=["png", "jpg", "jpeg", "webp"],
+                accept_multiple_files=True,
+                key="mmh3_upload_multi",
+            )
+            if uploaded_files:
+                if len(uploaded_files) > MAX_REFERENCE_IMAGES:
+                    st.warning(
+                        f"⚠️ {len(uploaded_files)} files selected — MiniMax allows at most "
+                        f"{MAX_REFERENCE_IMAGES} reference images. Only the first "
+                        f"{MAX_REFERENCE_IMAGES} will be used."
+                    )
+                image_sources = list(uploaded_files[:MAX_REFERENCE_IMAGES])
+                preview_cols = st.columns(min(len(image_sources), 5))
+                for i, f in enumerate(image_sources):
+                    with preview_cols[i % len(preview_cols)]:
+                        st.image(f, width=150, caption=f.name)
         else:
             uploaded = st.file_uploader(
                 "Reference image", type=["png", "jpg", "jpeg", "webp"], key="mmh3_upload"
             )
             if uploaded is not None:
                 st.image(uploaded, width=300, caption="Will be used as reference (preview)")
-                image_source = uploaded
+                image_sources = [uploaded]
 
-        if image_source is not None:
-            resolved_url, error = _normalize_reference_image(image_source)
+        for source in image_sources:
+            resolved_url, error = _normalize_reference_image(source)
             if resolved_url:
                 reference_assets.append(ContentItem(type="image_url", url=resolved_url, role=role))
-                st.caption(f"Using this image as `{role}`.")
             else:
-                st.info(f"{error} This generation will run as text-to-video instead.")
+                name = getattr(source, "name", str(source))
+                st.warning(f"⚠️ Skipped '{name}': {error}")
+
+        if image_sources and not reference_assets:
+            st.info("None of the selected image(s) could be used. This generation will run as text-to-video instead.")
+        elif reference_assets:
+            st.caption(f"Using {len(reference_assets)} image(s) as `{role}`.")
 
     try:
         cost = estimate_video_cost(
             model=model,
             resolution=resolution,
             duration_seconds=duration,
-            num_reference_images=1 if reference_assets else 0,
+            num_reference_images=len(reference_assets),
         )
     except MiniMaxPricingError as e:
         st.error(f"Pricing error: {e}")

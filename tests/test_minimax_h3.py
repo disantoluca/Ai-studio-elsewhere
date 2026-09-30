@@ -689,5 +689,28 @@ class TestRequestBodySizeGuard(unittest.TestCase):
         self.assertEqual(record.status, "failed")
 
 
+class TestMultiImageReferenceUpload(unittest.TestCase):
+    """The uploader now offers accept_multiple_files=True for the
+    reference_image role (documented cap of 9), while first_frame/
+    last_frame stay single-file since the API caps those at 1 regardless.
+    The actual Streamlit widget/preview-grid code isn't independently
+    testable without a full script run, but the two things that matter —
+    the shared cap constant and the resulting cost math for a real
+    multi-image sequence — are."""
+
+    def test_max_reference_images_constant_consistent_across_modules(self):
+        self.assertEqual(mmh3_ui.MAX_REFERENCE_IMAGES, mmh3.MAX_REFERENCE_IMAGES)
+        self.assertEqual(mmh3_ui.MAX_REFERENCE_IMAGES, 9)
+
+    def test_six_panel_sequence_cost_matches_free_tier_boundary(self):
+        """e.g. the Blue Tears storyboard: 6 cropped panels uploaded as
+        reference_image. H3's first 5 images are free, so this should
+        cost exactly one billable image beyond the output rate."""
+        cost = pricing.estimate_video_cost(
+            model="MiniMax-H3", resolution="768P", duration_seconds=6, num_reference_images=6
+        )
+        self.assertAlmostEqual(cost.total_usd, (0.08 * 6) + 0.04)
+
+
 if __name__ == "__main__":
     unittest.main()
