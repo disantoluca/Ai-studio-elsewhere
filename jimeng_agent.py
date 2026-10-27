@@ -19,20 +19,35 @@ logger = logging.getLogger(__name__)
 BYTEPLUS_API_KEY  = os.getenv("BYTEPLUS_API_KEY") or os.getenv("ARK_API_KEY")
 BYTEPLUS_BASE_URL = os.getenv(
     "BYTEPLUS_BASE_URL",
-    "https://ark.ap-southeast-1.bytepluses.com/api/v3"
+    "https://ark.ap-southeast.bytepluses.com/api/v3"
 )
 
-# Model IDs — find yours in the Ark console under "Model Endpoints"
-# Image (text-to-image): doubao-seedream-3-0-t2i-250415 or your endpoint ID
-IMAGE_MODEL = os.getenv("BYTEPLUS_IMAGE_MODEL", "doubao-seedream-3-0-t2i-250415")
+# Model IDs — BytePlus international names (GET /models lists them; each must
+# be activated in the Ark console before use)
+# Image (text-to-image): Seedream 5.0
+IMAGE_MODEL = os.getenv("BYTEPLUS_IMAGE_MODEL", "seedream-5-0-260128")
 
-# Video (image-to-video): seedance-2-pro-x2v-250518 or your endpoint ID
-VIDEO_MODEL_I2V = os.getenv("BYTEPLUS_VIDEO_MODEL_I2V", "seedance-2-pro-x2v-250518")
+# Video: Dreamina Seedance 2.0 handles both image-to-video and text-to-video
+VIDEO_MODEL_I2V = os.getenv("BYTEPLUS_VIDEO_MODEL_I2V", "dreamina-seedance-2-0-260128")
+VIDEO_MODEL_T2V = os.getenv("BYTEPLUS_VIDEO_MODEL_T2V", "dreamina-seedance-2-0-260128")
 
-# Video (text-to-video): seedance-2-pro-t2v-250518 or your endpoint ID
-VIDEO_MODEL_T2V = os.getenv("BYTEPLUS_VIDEO_MODEL_T2V", "seedance-2-pro-t2v-250518")
+# Seedream 5 rejects images under 3,686,400 px (~1920x1920); smaller sizes are
+# scaled up keeping their aspect ratio. Set 0 for older models.
+MIN_PIXELS = int(os.getenv("JIMENG_MIN_PIXELS", "3686400"))
 
 AVAILABLE = bool(BYTEPLUS_API_KEY)
+
+
+def fit_size(size: str) -> str:
+    """'1792x1024' -> a WxH string meeting MIN_PIXELS, same aspect ratio."""
+    try:
+        w, h = (int(v) for v in size.lower().replace("*", "x").split("x"))
+    except ValueError:
+        return size
+    if MIN_PIXELS and w * h < MIN_PIXELS:
+        scale = (MIN_PIXELS / (w * h)) ** 0.5
+        w, h = (-(-int(v * scale) // 16) * 16 for v in (w, h))  # round up to /16
+    return f"{w}x{h}"
 
 
 # ── Prompt builder ────────────────────────────────────────────
@@ -94,9 +109,11 @@ def generate_cinematic_image(
         "model":           IMAGE_MODEL,
         "prompt":          positive,
         "negative_prompt": negative,
-        "size":            size,
+        "size":            fit_size(size),
         "n":               1,
         "response_format": "url",
+        # BytePlus stamps "AI generated" unless disabled
+        "watermark":       os.getenv("JIMENG_WATERMARK", "false").lower() == "true",
     }
 
     try:
@@ -191,8 +208,11 @@ def generate_cinematic_video(
             logger.info(f"  task {task_id} status: {status}")
 
             if status == "succeeded":
-                videos = task.get("content", [])
-                for item in videos:
+                content = task.get("content") or {}
+                if isinstance(content, dict):      # {"video_url": "https://..."}
+                    url = content.get("video_url")
+                    return url.get("url") if isinstance(url, dict) else url
+                for item in content:               # [{"type": "video_url", ...}]
                     if item.get("type") == "video_url":
                         return item["video_url"]["url"]
                 return None
